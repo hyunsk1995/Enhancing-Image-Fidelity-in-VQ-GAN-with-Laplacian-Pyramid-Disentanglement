@@ -43,7 +43,7 @@ class HierarchicalVQModel(pl.LightningModule):
             embed_dim, embed_dim, channel, n_res_block, n_res_channel, stride=2
         )
 
-        self.quantize_conv_b = torch.nn.Conv2d(embed_dim + channel, embed_dim, 1)
+        self.quant_conv_b = torch.nn.Conv2d(embed_dim + channel, embed_dim, 1)
         self.quantize_b = VectorQuantizer(embed_dim, n_embed)
         self.upsample_t = torch.nn.ConvTranspose2d(
             embed_dim, embed_dim, 4, stride=2, padding=1
@@ -132,26 +132,26 @@ class HierarchicalVQModel(pl.LightningModule):
     #     x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format)
     #     return x.float()
 
-    # def training_step(self, batch, batch_idx, optimizer_idx):
-    #     x = self.get_input(batch, self.image_key)
-    #     xrec, qloss = self(x)
+    def training_step(self, batch, batch_idx, optimizer_idx):
+        x = self.get_input(batch, self.image_key)
+        xrec, qloss = self(x)
 
-    #     if optimizer_idx == 0:
-    #         # autoencode
-    #         aeloss, log_dict_ae = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
-    #                                         last_layer=self.get_last_layer(), split="train")
+        if optimizer_idx == 0:
+            # autoencode
+            aeloss, log_dict_ae = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
+                                            last_layer=self.get_last_layer(), split="train")
 
-    #         self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-    #         self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-    #         return aeloss
+            self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            return aeloss
 
-    #     if optimizer_idx == 1:
-    #         # discriminator
-    #         discloss, log_dict_disc = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
-    #                                         last_layer=self.get_last_layer(), split="train")
-    #         self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-    #         self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-    #         return discloss
+        # if optimizer_idx == 1:
+        #     # discriminator
+        #     discloss, log_dict_disc = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
+        #                                     last_layer=self.get_last_layer(), split="train")
+        #     self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        #     self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+        #     return discloss
 
     # def validation_step(self, batch, batch_idx):
     #     x = self.get_input(batch, self.image_key)
@@ -170,17 +170,21 @@ class HierarchicalVQModel(pl.LightningModule):
     #     self.log_dict(log_dict_disc)
     #     return self.log_dict
 
-    # def configure_optimizers(self):
-    #     lr = self.learning_rate
-    #     opt_ae = torch.optim.Adam(list(self.encoder.parameters())+
-    #                               list(self.decoder.parameters())+
-    #                               list(self.quantize.parameters())+
-    #                               list(self.quant_conv.parameters())+
-    #                               list(self.post_quant_conv.parameters()),
-    #                               lr=lr, betas=(0.5, 0.9))
-    #     opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
-    #                                 lr=lr, betas=(0.5, 0.9))
-    #     return [opt_ae, opt_disc], []
+    def configure_optimizers(self):
+        lr = self.learning_rate
+        opt_ae = torch.optim.Adam(list(self.encoder_t.parameters())+
+                                  list(self.encoder_b.parameters())+
+                                  list(self.decoder_t.parameters())+
+                                  list(self.decoder.parameters())+
+                                  list(self.quantize_t.parameters())+
+                                  list(self.quantize_b.parameters())+
+                                  list(self.quant_conv_t.parameters())+
+                                  list(self.quant_conv_b.parameters()),
+                                #   list(self.post_quant_conv.parameters()),
+                                  lr=lr, betas=(0.5, 0.9))
+        # opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
+        #                             lr=lr, betas=(0.5, 0.9))
+        return [opt_ae], []
 
     # def get_last_layer(self):
     #     return self.decoder.conv_out.weight
