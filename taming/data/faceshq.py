@@ -47,6 +47,26 @@ class CelebAHQValidation(FacesBase):
         self.data = NumpyPaths(paths=paths, size=size, random_crop=False)
         self.keys = keys
 
+class FFHQ256Train(FacesBase):
+    def __init__(self, size, keys=None):
+        super().__init__()
+        root = "data/ffhq256"
+        with open("data/ffhqtrain.txt", "r") as f:
+            relpaths = f.read().splitlines()
+        paths = [os.path.join(root, relpath) for relpath in relpaths]
+        self.data = ImagePaths(paths=paths, size=size, random_crop=False)
+        self.keys = keys
+
+
+class FFHQ256Validation(FacesBase):
+    def __init__(self, size, keys=None):
+        super().__init__()
+        root = "data/ffhq256"
+        with open("data/ffhqvalidation.txt", "r") as f:
+            relpaths = f.read().splitlines()
+        paths = [os.path.join(root, relpath) for relpath in relpaths]
+        self.data = ImagePaths(paths=paths, size=size, random_crop=False)
+        self.keys = keys
 
 class FFHQTrain(FacesBase):
     def __init__(self, size, keys=None):
