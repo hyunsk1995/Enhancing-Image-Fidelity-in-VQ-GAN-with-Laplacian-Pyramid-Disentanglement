@@ -1,6 +1,6 @@
 model:
   base_learning_rate: 4.5e-6
-  target: taming.models.vqgan2.HierarchicalVQModel
+  target: taming.models.vqgan.VQModel
   params:
     embed_dim: 64
     n_embed: 512
