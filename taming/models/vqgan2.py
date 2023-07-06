@@ -133,18 +133,16 @@ class HierarchicalVQModel(pl.LightningModule):
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format)
         return x.float()
 
-    def training_step(self, batch, batch_idx, optimizer_idx):
+    def training_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
         xrec, qloss = self(x)
 
-        if optimizer_idx == 0:
-            # autoencode
-            aeloss, log_dict_ae = self.loss(qloss, x, xrec, split="train")
+        # autoencode
+        aeloss, log_dict_ae = self.loss(qloss, x, xrec, split="train")
 
-            self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-            return aeloss
-        print(xrec2)
+        self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+        return aeloss
 
         # if optimizer_idx == 1:
         #     # discriminator
@@ -180,9 +178,6 @@ class HierarchicalVQModel(pl.LightningModule):
                                 #   list(self.post_quant_conv.parameters()),
                                   lr=lr, betas=(0.5, 0.9))
         return [opt_ae], []
-
-    def get_last_layer(self):
-        return self.decoder.conv_out.weight
 
     def log_images(self, batch, **kwargs):
         log = dict()

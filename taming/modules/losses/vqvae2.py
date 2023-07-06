@@ -12,10 +12,9 @@ class DummyLoss(nn.Module):
 
 
 class VQVAE2Loss(nn.Module):
-    def __init__(self, codebook_weight=1.0, pixelloss_weight=1.0):
+    def __init__(self, codebook_weight=1.0):
         super().__init__()
         self.codebook_weight = codebook_weight
-        self.pixel_weight = pixelloss_weight
 
     def forward(self, codebook_loss, inputs, reconstructions, split="train"):
         rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
@@ -24,8 +23,7 @@ class VQVAE2Loss(nn.Module):
         # nll_loss = torch.sum(nll_loss) / nll_loss.shape[0]
         # nll_loss = torch.mean(nll_loss)
 
-        # if optimizer_idx == 0:
-        loss = rec_loss + self.codebook_weight * codebook_loss.mean()
+        loss = rec_loss.mean() + self.codebook_weight * codebook_loss.mean()
 
         log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
                 "{}/quant_loss".format(split): codebook_loss.detach().mean(),
