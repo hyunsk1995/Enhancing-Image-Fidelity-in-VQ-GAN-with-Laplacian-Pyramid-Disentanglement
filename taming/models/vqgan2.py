@@ -37,14 +37,14 @@ class HierarchicalVQModel(pl.LightningModule):
         self.encoder_t = Encoder(channel, channel, n_res_block, n_res_channel, stride=2)
 
         self.quant_conv_t = torch.nn.Conv2d(channel, embed_dim, 1)
-        self.quantize_t = VectorQuantizer(embed_dim, n_embed)
+        self.quantize_t = VectorQuantizer(embed_dim, n_embed, beta=0.25)
 
         self.decoder_t = Decoder(
             embed_dim, embed_dim, channel, n_res_block, n_res_channel, stride=2
         )
 
         self.quant_conv_b = torch.nn.Conv2d(embed_dim + channel, embed_dim, 1)
-        self.quantize_b = VectorQuantizer(embed_dim, n_embed)
+        self.quantize_b = VectorQuantizer(embed_dim, n_embed, beta=0.25)
         self.upsample_t = torch.nn.ConvTranspose2d(
             embed_dim, embed_dim, 4, stride=2, padding=1
         )
@@ -94,7 +94,6 @@ class HierarchicalVQModel(pl.LightningModule):
         enc_t = self.encoder_t(enc_b)
 
         quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
-        print(quant_t.shape)
         quant_t, diff_t, id_t = self.quantize_t(quant_t)
         quant_t = quant_t.permute(0, 3, 1, 2)
         diff_t = diff_t.unsqueeze(0)
@@ -143,14 +142,6 @@ class HierarchicalVQModel(pl.LightningModule):
         self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
         return aeloss
-
-        # if optimizer_idx == 1:
-        #     # discriminator
-        #     discloss, log_dict_disc = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
-        #                                     last_layer=self.get_last_layer(), split="train")
-        #     self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        #     self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-        #     return discloss
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
