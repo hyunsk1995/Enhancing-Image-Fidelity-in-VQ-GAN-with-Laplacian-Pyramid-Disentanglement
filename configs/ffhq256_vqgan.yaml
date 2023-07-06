@@ -19,13 +19,9 @@ model:
       beta: 0.25
 
     lossconfig:
-      target: taming.modules.losses.vqperceptual.VQLPIPSWithDiscriminator
+      target: taming.modules.losses.vqvae2.VQVAE2Loss
       params:
-        disc_conditional: False
-        disc_in_channels: 3
-        disc_start: 30001
-        disc_weight: 0.8
-        codebook_weight: 1.0
+        codebook_weight: 0.25
 
 data:
   target: main.DataModuleFromConfig
