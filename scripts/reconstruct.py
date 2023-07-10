@@ -1,5 +1,4 @@
 import io
-import os, sys
 import requests
 import PIL
 from PIL import Image
@@ -53,10 +52,9 @@ def reconstruct_with_vqgan(x, model):
   xrec = model.decode(quant_t, quant_b)
   return xrec
 
-
-config256 = load_config("logs/2023-07-06T16-49-44_ffhq256_vqgan/configs/2023-07-06T16-49-44-project.yaml", display=False)
-model256 = load_vqgan(config256, "logs/2023-07-06T16-49-44_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=12.ckpt").to(DEVICE)
-
+log = "2023-07-10T12-05-48"
+config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
+model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=385.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)
 
 def download_image(url):
@@ -105,7 +103,7 @@ def stack_reconstructions(input, x0, titles=[]):
   img.paste(x0, (1*w,0))
   for i, title in enumerate(titles):
     ImageDraw.Draw(img).text((i*w, 0), f'{title}', (255, 255, 255), font=font) # coordinates, text, color, font
-  img.save("test.png")
+  img.save("test.jpg")
   return img
 
 titles=["Input", "VQVAE2(256)"]

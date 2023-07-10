@@ -16,17 +16,17 @@ model:
       residual_units: 64
       attn_resolutions: [16]
       dropout: 0.0
-      beta: 0.25
+      # beta: 0.25
 
     lossconfig:
-      target: taming.modules.losses.vqvae2.VQVAE2Loss
+      target: taming.modules.losses.vqvae2loss.VQVAE2Loss
       params:
-        codebook_weight: 1.0
+        codebook_weight: 0.25
 
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 8
+    batch_size: 160
     num_workers: 8
     train:
       target: taming.data.faceshq.FFHQ256Train

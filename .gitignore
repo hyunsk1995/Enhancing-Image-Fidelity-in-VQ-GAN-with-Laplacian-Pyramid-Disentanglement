@@ -4,3 +4,5 @@ taming/modules/autoencoder
 logs
 taming_transformers.egg-info
 .vscode
+*.jpg
+*.png
