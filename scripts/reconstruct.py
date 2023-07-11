@@ -53,8 +53,8 @@ def reconstruct_with_vqgan(x, model):
   return xrec
 
 log = "2023-07-10T22-49-13"
-config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
-model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=559.ckpt".format(log)).to(DEVICE)
+config256 = load_config("logs/vqvae/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
+model256 = load_vqgan(config256, "logs/vqvae/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=559.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)
 
 def download_image(url):

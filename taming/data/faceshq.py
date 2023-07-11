@@ -48,7 +48,7 @@ class CelebAHQValidation(FacesBase):
         self.keys = keys
 
 class FFHQ256Train(FacesBase):
-    def __init__(self, size, keys=None):
+    def __init__(self, size, keys=None, crop_size=None, coord=False):
         super().__init__()
         root = "data/resized"
         with open("data/ffhq256train.txt", "r") as f:
@@ -56,10 +56,34 @@ class FFHQ256Train(FacesBase):
         paths = [os.path.join(root, relpath) for relpath in relpaths]
         self.data = ImagePaths(paths=paths, size=size, random_crop=False)
         self.keys = keys
+        self.coord = coord
+        if crop_size is not None:
+            self.cropper = albumentations.RandomCrop(height=crop_size,width=crop_size)
+            if self.coord:
+                self.cropper = albumentations.Compose([self.cropper],
+                                                      additional_targets={"coord": "image"})
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        ex, y = self.data[i]
+        if hasattr(self, "cropper"):
+            if not self.coord:
+                out = self.cropper(image=ex["image"])
+                ex["image"] = out["image"]
+            else:
+                h,w,_ = ex["image"].shape
+                coord = np.arange(h*w).reshape(h,w,1)/(h*w)
+                out = self.cropper(image=ex["image"], coord=coord)
+                ex["image"] = out["image"]
+                ex["coord"] = out["coord"]
+        ex["class"] = y
+        return ex
 
 
 class FFHQ256Validation(FacesBase):
-    def __init__(self, size, keys=None):
+    def __init__(self, size, keys=None, crop_size=None, coord=False):
         super().__init__()
         root = "data/resized"
         with open("data/ffhq256validation.txt", "r") as f:
@@ -67,6 +91,31 @@ class FFHQ256Validation(FacesBase):
         paths = [os.path.join(root, relpath) for relpath in relpaths]
         self.data = ImagePaths(paths=paths, size=size, random_crop=False)
         self.keys = keys
+        self.coord = coord
+        if crop_size is not None:
+            self.cropper = albumentations.RandomCrop(height=crop_size,width=crop_size)
+            if self.coord:
+                self.cropper = albumentations.Compose([self.cropper],
+                                                      additional_targets={"coord": "image"})
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        ex, y = self.data[i]
+        if hasattr(self, "cropper"):
+            if not self.coord:
+                out = self.cropper(image=ex["image"])
+                ex["image"] = out["image"]
+            else:
+                h,w,_ = ex["image"].shape
+                coord = np.arange(h*w).reshape(h,w,1)/(h*w)
+                out = self.cropper(image=ex["image"], coord=coord)
+                ex["image"] = out["image"]
+                ex["coord"] = out["coord"]
+        ex["class"] = y
+        return ex
+
 
 class FFHQTrain(FacesBase):
     def __init__(self, size, keys=None):
