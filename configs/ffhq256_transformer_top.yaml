@@ -15,7 +15,7 @@ model:
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: checkpoints/vqvae/epoch=397.ckpt
+        ckpt_path: checkpoints/vqvae/epoch=559.ckpt
         embed_dim: 64
         n_embed: 512
         ddconfig:
@@ -51,14 +51,12 @@ data:
     batch_size: 2
     num_workers: 8
     train:
-      target: taming.data.faceshq.FacesHQTrain
+      target: taming.data.faceshq.FFHQ256Train
       params:
         size: 256
-        crop_size: 256
-        coord: True
+        # coord: True
     validation:
-      target: taming.data.faceshq.FacesHQValidation
+      target: taming.data.faceshq.FFHQ256Validation
       params:
         size: 256
-        crop_size: 256
-        coord: True
+        # coord: True
