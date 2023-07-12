@@ -6,3 +6,4 @@ taming_transformers.egg-info
 .vscode
 *.jpg
 *.png
+checkpoints

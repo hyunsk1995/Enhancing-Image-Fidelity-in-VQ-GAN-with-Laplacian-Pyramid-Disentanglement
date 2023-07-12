@@ -167,10 +167,15 @@ class MultiStageTransformer(pl.LightningModule):
 
     @torch.no_grad()
     def encode_to_z(self, x):
-        quant_z, _, info = self.first_stage_model.encode(x)
-        indices = info[2].view(quant_z.shape[0], -1)
-        indices = self.permuter(indices)
-        return quant_z, indices
+        quant_zt, quant_zb, _, info_t, info_b = self.first_stage_model.encode(x)
+        print(quant_zt.shape, info_t.shape)
+        print(quant_zb.shape, info_b.shape)
+        indices_t = info_t[2].view(quant_zt.shape[0], -1)
+        indices_b = info_b[2].view(quant_zb.shape[0], -1)
+        indices_t = self.permuter(indices_t)
+        indices_b = self.permuter(indices_b)
+        print(indices_t.shape, indices_b.shape)
+        return quant_zt, quant_zb, indices_t, indices_b
 
     @torch.no_grad()
     def encode_to_c(self, c):
