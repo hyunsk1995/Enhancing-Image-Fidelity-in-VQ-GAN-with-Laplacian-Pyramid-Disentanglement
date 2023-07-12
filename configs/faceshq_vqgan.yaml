@@ -2,8 +2,8 @@ model:
   base_learning_rate: 4.5e-6
   target: taming.models.vqgan.VQModel
   params:
-    embed_dim: 256
-    n_embed: 1024
+    embed_dim: 64
+    n_embed: 512
     ddconfig:
       double_z: False
       z_channels: 256
@@ -28,7 +28,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 3
+    batch_size: 8
     num_workers: 8
     train:
       target: taming.data.faceshq.FacesHQTrain

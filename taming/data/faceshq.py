@@ -95,9 +95,9 @@ class FFHQValidation(FacesBase):
 class FacesHQTrain(Dataset):
     # CelebAHQ [0] + FFHQ [1]
     def __init__(self, size, keys=None, crop_size=None, coord=False):
-        d1 = CelebAHQTrain(size=size, keys=keys)
-        d2 = FFHQTrain(size=size, keys=keys)
-        self.data = ConcatDatasetWithIndex([d1, d2])
+        # d1 = CelebAHQTrain(size=size, keys=keys)
+        d2 = FFHQ256Train(size=size, keys=keys)
+        self.data = ConcatDatasetWithIndex([d2])
         self.coord = coord
         if crop_size is not None:
             self.cropper = albumentations.RandomCrop(height=crop_size,width=crop_size)
@@ -127,9 +127,9 @@ class FacesHQTrain(Dataset):
 class FacesHQValidation(Dataset):
     # CelebAHQ [0] + FFHQ [1]
     def __init__(self, size, keys=None, crop_size=None, coord=False):
-        d1 = CelebAHQValidation(size=size, keys=keys)
-        d2 = FFHQValidation(size=size, keys=keys)
-        self.data = ConcatDatasetWithIndex([d1, d2])
+        # d1 = CelebAHQValidation(size=size, keys=keys)
+        d2 = FFHQ256Validation(size=size, keys=keys)
+        self.data = ConcatDatasetWithIndex([d2])
         self.coord = coord
         if crop_size is not None:
             self.cropper = albumentations.CenterCrop(height=crop_size,width=crop_size)
