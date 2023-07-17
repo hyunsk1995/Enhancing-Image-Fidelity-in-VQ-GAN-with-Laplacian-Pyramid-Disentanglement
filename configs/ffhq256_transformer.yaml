@@ -14,9 +14,9 @@ model:
     first_stage_config:
       target: taming.models.vqgan.VQModel
       params:
-        ckpt_path: logs/2023-07-12T02-57-59_faceshq_vqgan/testtube/version_0/checkpoints/epoch=19.ckpt
-        embed_dim: 256
-        n_embed: 1024
+        ckpt_path: logs/2023-07-11T14-29-18_faceshq_vqgan/testtube/version_0/checkpoints/epoch=19.ckpt
+        embed_dim: 64
+        n_embed: 512
         ddconfig:
           double_z: false
           z_channels: 256
@@ -45,17 +45,17 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 4
+    batch_size: 2
     num_workers: 8
     train:
-      target: taming.data.faceshq.FacesHQTrain
+      target: taming.data.faceshq.FFHQ256Train
       params:
         size: 256
-        crop_size: 256
+        # crop_size: 256
         coord: True
     validation:
-      target: taming.data.faceshq.FacesHQValidation
+      target: taming.data.faceshq.FFHQ256Validation
       params:
         size: 256
-        crop_size: 256
+        # crop_size: 256
         coord: True
