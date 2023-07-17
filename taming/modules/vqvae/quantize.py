@@ -379,6 +379,20 @@ class VectorQuantizer2(nn.Module):
 
     def embed_code(self, embed_id):
         return F.embedding(embed_id, self.embed.transpose(0, 1))
+    
+    def get_codebook_entry(self, indices, shape):
+        # get quantized latent vectors
+        print(indices.shape)
+        z_q = self.embed_code(indices)
+        print(z_q.shape)
+        if shape is not None:
+            z_q = z_q.view(shape)
+            
+            # reshape back to match original input shape
+            z_q = z_q.permute(0, 3, 1, 2).contiguous()
+
+        return z_q
+    
 
 class EmbeddingEMA(nn.Module):
     def __init__(self, num_tokens, codebook_dim, decay=0.99, eps=1e-5):

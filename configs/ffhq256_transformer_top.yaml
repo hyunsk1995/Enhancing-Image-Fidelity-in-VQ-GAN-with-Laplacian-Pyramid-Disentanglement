@@ -2,15 +2,16 @@ model:
   base_learning_rate: 4.5e-06
   target: taming.models.multistage_transformer.MultiStageTransformer
   params:
+    hier: top
     cond_stage_key: coord
     transformer_config:
       target: taming.modules.transformer.mingpt.GPT
       params:
         vocab_size: 1024
-        block_size: 512
+        block_size: 1280
         n_layer: 24
         n_head: 16
-        n_embd: 1024
+        n_embd: 512
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
@@ -47,7 +48,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 2
+    batch_size: 3
     num_workers: 8
     train:
       target: taming.data.faceshq.FacesHQTrain

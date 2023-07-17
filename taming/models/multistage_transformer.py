@@ -27,6 +27,7 @@ class MultiStageTransformer(pl.LightningModule):
                  pkeep=1.0,
                  sos_token=0,
                  unconditional=False,
+                 hier="top",
                  ):
         super().__init__()
         self.be_unconditional = unconditional
@@ -44,6 +45,7 @@ class MultiStageTransformer(pl.LightningModule):
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
         self.downsample_cond_size = downsample_cond_size
         self.pkeep = pkeep
+        self.hier = hier
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
@@ -167,15 +169,13 @@ class MultiStageTransformer(pl.LightningModule):
 
     @torch.no_grad()
     def encode_to_z(self, x):
-        quant_zt, quant_zb, _, info_t, info_b = self.first_stage_model.encode(x)
-        print(quant_zt.shape, info_t.shape)
-        print(quant_zb.shape, info_b.shape)
-        indices_t = info_t[2].view(quant_zt.shape[0], -1)
-        indices_b = info_b[2].view(quant_zb.shape[0], -1)
-        indices_t = self.permuter(indices_t)
-        indices_b = self.permuter(indices_b)
-        print(indices_t.shape, indices_b.shape)
-        return quant_zt, quant_zb, indices_t, indices_b
+        if self.hier == "top":
+            quant_z, info = self.first_stage_model.encode_top(x)
+        elif self.hier == "bottom":
+            quant_z, info = self.first_stage_model.encode_bottom(x)
+        indices = info.view(quant_z.shape[0], -1)
+        indices = self.permuter(indices)
+        return quant_z, indices
 
     @torch.no_grad()
     def encode_to_c(self, c):
@@ -190,9 +190,15 @@ class MultiStageTransformer(pl.LightningModule):
     def decode_to_img(self, index, zshape):
         index = self.permuter(index, reverse=True)
         bhwc = (zshape[0],zshape[2],zshape[3],zshape[1])
-        quant_z = self.first_stage_model.quantize.get_codebook_entry(
-            index.reshape(-1), shape=bhwc)
-        x = self.first_stage_model.decode(quant_z)
+        if self.hier == "top":
+            quant_z = self.first_stage_model.quantize_t.get_codebook_entry(
+                index.reshape(-1), shape=bhwc)
+            x = self.first_stage_model.decoder_t(quant_z)
+        elif self.hier == "bottom":
+            quant_z = self.first_stage_model.quantize_b.get_codebook_entry(
+                index.reshape(-1), shape=bhwc)
+            x = self.first_stage_model.decoder(quant_z)
+        
         return x
 
     @torch.no_grad()
