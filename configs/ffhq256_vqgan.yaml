@@ -16,12 +16,12 @@ model:
       residual_units: 64
       attn_resolutions: [16]
       dropout: 0.0
-      # beta: 0.25
 
     lossconfig:
       target: taming.modules.losses.vqvae2loss.VQVAE2Loss
       params:
-        codebook_weight: 0.25
+        codebook_weight_t: 0.25
+        codebook_weight_b: 0.25
 
 data:
   target: main.DataModuleFromConfig

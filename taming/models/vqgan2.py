@@ -9,6 +9,8 @@ from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 from taming.modules.vqvae.quantize import GumbelQuantize
 from taming.modules.vqvae.quantize import EMAVectorQuantizer
 
+import cv2
+
 
 class HierarchicalVQModel(pl.LightningModule):
     def __init__(self,
@@ -42,14 +44,14 @@ class HierarchicalVQModel(pl.LightningModule):
             embed_dim, embed_dim, channel, n_res_block, n_res_channel, stride=2
         )
 
-        self.quant_conv_b = torch.nn.Conv2d(embed_dim + channel, embed_dim, 1)
+        self.quant_conv_b = torch.nn.Conv2d(channel, embed_dim, 1)
         self.quantize_b = VectorQuantizer(embed_dim, n_embed)
         self.upsample_t = torch.nn.ConvTranspose2d(
             embed_dim, embed_dim, 4, stride=2, padding=1
         )
 
-        self.decoder = Decoder(
-            embed_dim + embed_dim,
+        self.decoder_b = Decoder(
+            embed_dim,
             in_channel,
             channel,
             n_res_block,
@@ -83,10 +85,10 @@ class HierarchicalVQModel(pl.LightningModule):
         print(f"Restored from {path}")
 
     def forward(self, input):
-        quant_t, quant_b, diff, _, _ = self.encode(input)
-        dec = self.decode(quant_t, quant_b)
+        quant_t, quant_b, diff_t, diff_b, _, _ = self.encode(input)
+        dec, dec_t, dec_b = self.decode(quant_t, quant_b)
 
-        return dec, diff
+        return dec, dec_t, dec_b, diff_t, diff_b
 
     def encode(self, input):
         enc_b = self.encoder_b(input)
@@ -97,15 +99,12 @@ class HierarchicalVQModel(pl.LightningModule):
         quant_t = quant_t.permute(0, 3, 1, 2)
         diff_t = diff_t.unsqueeze(0)
 
-        dec_t = self.decoder_t(quant_t)
-        enc_b = torch.cat([dec_t, enc_b], 1)
-
         quant_b = self.quant_conv_b(enc_b).permute(0, 2, 3, 1)
         quant_b, diff_b, id_b = self.quantize_b(quant_b)
         quant_b = quant_b.permute(0, 3, 1, 2)
         diff_b = diff_b.unsqueeze(0)
 
-        return quant_t, quant_b, diff_t + diff_b, id_t, id_b
+        return quant_t, quant_b, diff_t, diff_b, id_t, id_b
     
     # Seperation of encoding used in transformer
     def encode_top(self, input):
@@ -139,11 +138,12 @@ class HierarchicalVQModel(pl.LightningModule):
         return quant_b, id_b
 
     def decode(self, quant_t, quant_b):
-        upsample_t = self.upsample_t(quant_t)
-        quant = torch.cat([upsample_t, quant_b], 1)
-        dec = self.decoder(quant)
+        dec_t = self.decoder_t(quant_t)
+        dec_b = self.decoder_b(quant_b)
+    
+        dec = cv2.pyrUp(dec_t) + dec_b
 
-        return dec
+        return dec_t, dec_b, dec
     
     def decode_code(self, code_t, code_b):
         quant_t = self.quantize_t.embed_code(code_t)
@@ -164,10 +164,10 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        xrec, qloss = self(x)
+        xrec, lf_rec, hf_rec, qloss_t, qloss_b = self(x)
 
         # autoencode
-        aeloss, log_dict_ae = self.loss(qloss, x, xrec, split="train")
+        aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="train")
 
         self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
@@ -175,8 +175,8 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        xrec, qloss = self(x)
-        aeloss, log_dict_ae = self.loss(qloss, x, xrec, split="val")
+        xrec, lf_rec, hf_rec, qloss_t, qloss_b = self(x)
+        aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="val")
 
         rec_loss = log_dict_ae["val/rec_loss"]
         self.log("val/rec_loss", rec_loss,
@@ -191,7 +191,7 @@ class HierarchicalVQModel(pl.LightningModule):
         opt_ae = torch.optim.Adam(list(self.encoder_t.parameters())+
                                   list(self.encoder_b.parameters())+
                                   list(self.decoder_t.parameters())+
-                                  list(self.decoder.parameters())+
+                                  list(self.decoder_b.parameters())+
                                   list(self.quantize_t.parameters())+
                                   list(self.quantize_b.parameters())+
                                   list(self.quant_conv_t.parameters())+
