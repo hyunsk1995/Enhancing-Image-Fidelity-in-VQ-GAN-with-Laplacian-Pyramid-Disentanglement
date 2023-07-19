@@ -200,6 +200,20 @@ class MultiStageTransformer(pl.LightningModule):
             x = self.first_stage_model.decoder(quant_z)
         
         return x
+    
+    @torch.no_grad()
+    def decode_full_img(self, index_t, index_b, zshape_t, zshape_b):
+        index_t = self.permuter(index_t, reverse=True)
+        index_b = self.permuter(index_b, reverse=True)
+        bhwc_t = (zshape_t[0],zshape_t[2],zshape_t[3],zshape_t[1])
+        bhwc_b = (zshape_b[0],zshape_b[2],zshape_b[3],zshape_b[1])
+        quant_zt = self.first_stage_model.quantize_t.get_codebook_entry(
+            index_t.reshape(-1), shape=bhwc_t)
+        quant_zb = self.first_stage_model.quantize_b.get_codebook_entry(
+            index_b.reshape(-1), shape=bhwc_b)
+
+        x = self.first_stage_model.decode(quant_zt, quant_zb)
+        return x
 
     @torch.no_grad()
     def log_images(self, batch, temperature=None, top_k=None, callback=None, lr_interface=False, **kwargs):

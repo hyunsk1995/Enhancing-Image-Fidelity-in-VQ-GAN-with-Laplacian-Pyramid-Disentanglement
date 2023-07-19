@@ -171,7 +171,6 @@ if __name__ == "__main__":
     desired_z_shape, desired_resolution = get_resolution(opt.resolution)
     conditional = opt.conditional
 
-    print(ckpt)
     gpu = True
     eval_mode = True
     show_config = False

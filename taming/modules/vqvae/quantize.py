@@ -382,9 +382,7 @@ class VectorQuantizer2(nn.Module):
     
     def get_codebook_entry(self, indices, shape):
         # get quantized latent vectors
-        print(indices.shape)
         z_q = self.embed_code(indices)
-        print(z_q.shape)
         if shape is not None:
             z_q = z_q.view(shape)
             

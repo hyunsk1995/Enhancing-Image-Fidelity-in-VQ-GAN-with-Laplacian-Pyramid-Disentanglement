@@ -15,7 +15,7 @@ model:
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: checkpoints/vqvae/epoch=9.ckpt
+        ckpt_path: checkpoints/vqvae/epoch=199.ckpt
         embed_dim: 64
         n_embed: 512
         ddconfig:

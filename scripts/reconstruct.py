@@ -46,15 +46,15 @@ def custom_to_pil(x):
   return x
 
 def reconstruct_with_vqgan(x, model):
-  # could also use model(x) for reconstruction but use explicit encoding and decoding here
+  
   quant_t, quant_b, diff, id_t, id_b = model.encode(x)
   print(f"VQGAN --- {model.__class__.__name__}: latent shape: {quant_t.shape[2:]}")
   xrec = model.decode(quant_t, quant_b)
   return xrec
 
-log = "2023-07-11T21-13-33"
-config256 = load_config("logs/vqvae/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
-model256 = load_vqgan(config256, "logs/vqvae/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=299.ckpt".format(log)).to(DEVICE)
+log = "2023-07-18T22-44-00"
+config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
+model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=199.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)
 
 def download_image(url):
