@@ -42,7 +42,7 @@ model:
     cond_stage_config:
       target: taming.modules.misc.coord.CoordStage
       params:
-        n_embed: 1024
+        n_embed: 512
         down_factor: 16
 
 data:
