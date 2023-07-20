@@ -7,7 +7,7 @@ model:
     transformer_config:
       target: taming.modules.transformer.mingpt.GPT
       params:
-        vocab_size: 1024
+        vocab_size: 512
         block_size: 4351
         n_layer: 24
         n_head: 4
@@ -15,7 +15,7 @@ model:
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: checkpoints/vqvae/epoch=9.ckpt
+        ckpt_path: checkpoints/vqvae/epoch=199.ckpt
         embed_dim: 64
         n_embed: 512
         ddconfig:
