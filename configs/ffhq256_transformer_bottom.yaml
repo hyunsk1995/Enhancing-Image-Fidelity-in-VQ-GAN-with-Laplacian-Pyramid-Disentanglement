@@ -7,7 +7,7 @@ model:
     transformer_config:
       target: taming.modules.transformer.mingpt.GPT
       params:
-        vocab_size: 1024
+        vocab_size: 512
         block_size: 4351
         n_layer: 24
         n_head: 4
@@ -42,7 +42,7 @@ model:
     cond_stage_config:
       target: taming.modules.misc.coord.CoordStage
       params:
-        n_embed: 1024
+        n_embed: 512
         down_factor: 16
 
 data:

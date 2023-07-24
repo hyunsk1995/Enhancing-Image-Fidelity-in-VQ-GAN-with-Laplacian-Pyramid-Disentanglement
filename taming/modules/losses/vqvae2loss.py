@@ -6,8 +6,14 @@ from taming.modules.losses.lpips import LPIPS
 from taming.modules.discriminator.model import NLayerDiscriminator, weights_init
 
 import cv2
+from kornia.geometry.transform.pyramid import PyrUp, PyrDown
+from torchvision.transforms import GaussianBlur
+
 import numpy as np
 
+pyrUp = PyrUp()
+pyrDown = PyrDown()
+gaussianBlur = GaussianBlur((3,3), 1.5)
 
 class DummyLoss(nn.Module):
     def __init__(self):
@@ -23,8 +29,8 @@ class VQVAE2Loss(nn.Module):
     def forward(self, codebook_loss_t, codebook_loss_b, inputs, lf_recon, hf_recon, reconstructions, split="train"):
         lf, hf = disentangle(inputs)
         rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        lf_loss = torch.abs(lf.contiguous(), lf_recon.contiguous())
-        hf_loss = torch.abs(hf.contiguous(), hf_recon.contiguous())
+        lf_loss = torch.abs(torch.tensor(lf) - lf_recon)
+        hf_loss = torch.abs(torch.tensor(hf) - hf_recon)
 
         loss = rec_loss.mean() + lf_loss.mean() + hf_loss.mean() + self.codebook_weight_t * codebook_loss_t.mean() + self.codebook_weight_b * codebook_loss_b.mean()
 
@@ -45,14 +51,15 @@ class MultiStageTransformerLoss(nn.Module):
         return
     
 def disentangle(img):
-    print(img.shape)
-    assert img.shape == [256,256,3]
-    img = cv2.GaussianBlur(img, (3,3), 0)
-    Downimg = cv2.pyrDown(img)
-    DownUp = cv2.pyrUp(Downimg)
+    assert img[0].shape == (3, 256, 256)    
+    img = gaussianBlur(img)
+    
+    Downimg = pyrDown(img)
+    DownUp = pyrUp(Downimg)
 
-    imgarray = np.array(img, dtype=int)
-    DownUparray = np.array(DownUp, dtype=int)
-    Laplacian = imgarray - DownUparray
+    # imgarray = np.array(img.detach().cpu(), dtype=float)
+    # DownUparray = np.array(DownUp.detach().cpu(), dtype=float)
+    # Laplacian = imgarray - DownUparray
+    Laplacian = img - DownUp
 
     return Downimg, Laplacian

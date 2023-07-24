@@ -14,6 +14,9 @@ import yaml
 import torch
 from omegaconf import OmegaConf
 from taming.models.vqgan2 import HierarchicalVQModel
+from kornia.geometry.transform.pyramid import PyrUp
+
+pyrUp = PyrUp()
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -47,10 +50,10 @@ def custom_to_pil(x):
 
 def reconstruct_with_vqgan(x, model):
   # could also use model(x) for reconstruction but use explicit encoding and decoding here
-  quant_t, quant_b, diff, id_t, id_b = model.encode(x)
+  quant_t, quant_b, diff_t, diff_b, id_t, id_b = model.encode(x)
   print(f"VQGAN --- {model.__class__.__name__}: latent shape: {quant_t.shape[2:]}")
-  xrec = model.decode(quant_t, quant_b)
-  return xrec
+  rec_t, rec_b, xrec = model.decode(quant_t, quant_b)
+  return rec_t, rec_b, xrec
 
 log = "2023-07-21T09-39-10"
 config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
@@ -74,53 +77,34 @@ def preprocess(img, target_image_size=256, map_dalle=True):
     img = TF.resize(img, s, interpolation=PIL.Image.LANCZOS)
     img = TF.center_crop(img, output_size=2 * [target_image_size])
     img = torch.unsqueeze(T.ToTensor()(img), 0)
-    # if map_dalle: 
-    #   img = map_pixels(img)
     return img
 
-
-# def reconstruct_with_dalle(x, encoder, decoder, do_preprocess=False):
-#   # takes in tensor (or optionally, a PIL image) and returns a PIL image
-#   if do_preprocess:
-#     x = preprocess(x)
-#   z_logits = encoder(x)
-#   z = torch.argmax(z_logits, axis=1)
-  
-#   print(f"DALL-E: latent shape: {z.shape}")
-#   z = F.one_hot(z, num_classes=encoder.vocab_size).permute(0, 3, 1, 2).float()
-
-#   x_stats = decoder(z).float()
-#   x_rec = unmap_pixels(torch.sigmoid(x_stats[:, :3]))
-#   x_rec = T.ToPILImage(mode='RGB')(x_rec[0])
-
-#   return x_rec
-
-
-def stack_reconstructions(input, x0, titles=[]):
+def stack_reconstructions(input, x0, xt, xb, titles=[]):
   w, h = input.size[0], input.size[1]
-  img = Image.new("RGB", (2*w, h))
+  img = Image.new("RGB", (4*w, h))
   img.paste(input, (0,0))
   img.paste(x0, (1*w,0))
+  img.paste(xt, (2*w,0))
+  img.paste(xb, (3*w,0))
   for i, title in enumerate(titles):
     ImageDraw.Draw(img).text((i*w, 0), f'{title}', (255, 255, 255), font=font) # coordinates, text, color, font
   img.save("test.jpg")
   return img
 
-titles=["Input", "VQVAE2(256)"]
+titles=["Input", "VQVAE2(256)", "VQVAE2(top)", "VQVAE2(bottom)"]
 
 def reconstruction_pipeline(url, size=256):
-#   x_dalle = preprocess(download_image(url), target_image_size=size, map_dalle=True)
   x_vqgan = preprocess(download_image(url), target_image_size=size, map_dalle=False)
-#   x_dalle = x_dalle.to(DEVICE)
   x_vqgan = x_vqgan.to(DEVICE)
   
   print(f"input is of size: {x_vqgan.shape}")
-  x0 = reconstruct_with_vqgan(preprocess_vqgan(x_vqgan), model256)
-#   x1 = reconstruct_with_vqgan(preprocess_vqgan(x_vqgan), model16384)
-#   x2 = reconstruct_with_vqgan(preprocess_vqgan(x_vqgan), model1024)
-#   x3 = reconstruct_with_dalle(x_dalle, encoder_dalle, decoder_dalle)
+  xt, xb, x0 = reconstruct_with_vqgan(preprocess_vqgan(x_vqgan), model256)
+  xt = pyrUp(xt)
   img = stack_reconstructions(custom_to_pil(preprocess_vqgan(x_vqgan[0])),
-                              custom_to_pil(x0[0]), titles=titles)
+                              custom_to_pil(x0[0]), 
+                              custom_to_pil(xt[0]), 
+                              custom_to_pil(xb[0]), 
+                              titles=titles)
   return img
 
 reconstruction_pipeline(url='https://heibox.uni-heidelberg.de/f/7bb608381aae4539ba7a/?dl=1', size=256)

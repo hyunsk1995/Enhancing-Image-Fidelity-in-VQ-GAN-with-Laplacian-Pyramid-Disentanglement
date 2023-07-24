@@ -10,7 +10,9 @@ from taming.modules.vqvae.quantize import GumbelQuantize
 from taming.modules.vqvae.quantize import EMAVectorQuantizer
 
 import cv2
+from kornia.geometry.transform.pyramid import PyrUp
 
+pyrUp = PyrUp()
 
 class HierarchicalVQModel(pl.LightningModule):
     def __init__(self,
@@ -33,7 +35,7 @@ class HierarchicalVQModel(pl.LightningModule):
         n_res_channel = ddconfig["residual_units"]
         in_channel = ddconfig["in_channels"]
         channel = ddconfig["ch"]
-
+        
         self.encoder_b = Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4)
         self.encoder_t = Encoder(channel, channel, n_res_block, n_res_channel, stride=2)
 
@@ -41,7 +43,7 @@ class HierarchicalVQModel(pl.LightningModule):
         self.quantize_t = VectorQuantizer(embed_dim, n_embed)
 
         self.decoder_t = Decoder(
-            embed_dim, embed_dim, channel, n_res_block, n_res_channel, stride=2
+            embed_dim, in_channel, channel, n_res_block, n_res_channel, stride=4
         )
 
         self.quant_conv_b = torch.nn.Conv2d(channel, embed_dim, 1)
@@ -109,8 +111,8 @@ class HierarchicalVQModel(pl.LightningModule):
     # Seperation of encoding used in transformer
     def encode_top(self, input):
         enc_b = self.encoder_b(input)
-
         enc_t = self.encoder_t(enc_b)
+        
         quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
         quant_t, diff_t, id_t = self.quantize_t(quant_t)
         quant_t = quant_t.permute(0, 3, 1, 2)
@@ -120,15 +122,6 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def encode_bottom(self, input):
         enc_b = self.encoder_b(input)
-        enc_t = self.encoder_t(enc_b)
-
-        quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
-        quant_t, diff_t, id_t = self.quantize_t(quant_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        diff_t = diff_t.unsqueeze(0)
-
-        dec_t = self.decoder_t(quant_t)
-        enc_b = torch.cat([dec_t, enc_b], 1)
 
         quant_b = self.quant_conv_b(enc_b).permute(0, 2, 3, 1)
         quant_b, diff_b, id_b = self.quantize_b(quant_b)
@@ -140,9 +133,7 @@ class HierarchicalVQModel(pl.LightningModule):
     def decode(self, quant_t, quant_b):
         dec_t = self.decoder_t(quant_t)
         dec_b = self.decoder_b(quant_b)
-    
-        dec = cv2.pyrUp(dec_t) + dec_b
-
+        dec = pyrUp(dec_t) + dec_b
         return dec_t, dec_b, dec
     
     def decode_code(self, code_t, code_b):
@@ -164,7 +155,7 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        xrec, lf_rec, hf_rec, qloss_t, qloss_b = self(x)
+        lf_rec, hf_rec, xrec, qloss_t, qloss_b = self(x)
 
         # autoencode
         aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="train")
@@ -175,9 +166,8 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        xrec, lf_rec, hf_rec, qloss_t, qloss_b = self(x)
+        lf_rec, hf_rec, xrec, qloss_t, qloss_b = self(x)
         aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="val")
-
         rec_loss = log_dict_ae["val/rec_loss"]
         self.log("val/rec_loss", rec_loss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
