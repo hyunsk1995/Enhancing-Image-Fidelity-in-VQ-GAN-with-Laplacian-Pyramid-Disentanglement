@@ -213,6 +213,7 @@ class MultiStageTransformer(pl.LightningModule):
             index_b.reshape(-1), shape=bhwc_b)
 
         x = self.first_stage_model.decode(quant_zt, quant_zb)
+        # x = self.first_stage_model.decode_top(quant_zt, quant_zb)
         return x
 
     @torch.no_grad()

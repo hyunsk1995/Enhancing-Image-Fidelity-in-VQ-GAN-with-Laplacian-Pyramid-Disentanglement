@@ -44,7 +44,9 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
 
         cshape_t = quant_zt.shape
         cshape_b = quant_zb.shape
-
+        # print(top_model.first_stage_model)
+        # print("################################")
+        # print(bottom_model.first_stage_model)
         xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
         for i in range(xrec.shape[0]):
             save_image(xrec[i], os.path.join(outdir, "reconstructions",
@@ -166,7 +168,7 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
                     _, ix = torch.topk(probs, k=1, dim=-1)
                 b_idx[:,i,j] = ix
 
-        xsample = bottom_model.decode_full_img(t_idx[:,:cshape_t[2],:cshape_t[3]], b_idx[:,:cshape_b[2],:cshape_b[3]], cshape_t, cshape_b)
+        xsample = top_model.decode_full_img(t_idx[:,:cshape_t[2],:cshape_t[3]], b_idx[:,:cshape_b[2],:cshape_b[3]], cshape_t, cshape_b)
         for i in range(xsample.shape[0]):
             save_image(xsample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))
