@@ -17,13 +17,13 @@ class MultiStageTransformer(pl.LightningModule):
     def __init__(self,
                  transformer_config,
                  first_stage_config,
-                 cond_stage_config,
+                #  cond_stage_config,
                  permuter_config=None,
                  ckpt_path=None,
                  ignore_keys=[],
                  first_stage_key="image",
-                 cond_stage_key="depth",
-                 downsample_cond_size=-1,
+                #  cond_stage_key="depth",
+                #  downsample_cond_size=-1,
                  pkeep=1.0,
                  sos_token=0,
                  unconditional=False,
@@ -33,9 +33,9 @@ class MultiStageTransformer(pl.LightningModule):
         self.be_unconditional = unconditional
         self.sos_token = sos_token
         self.first_stage_key = first_stage_key
-        self.cond_stage_key = cond_stage_key
+        # self.cond_stage_key = cond_stage_key
         self.init_first_stage_from_ckpt(first_stage_config)
-        self.init_cond_stage_from_ckpt(cond_stage_config)
+        # self.init_cond_stage_from_ckpt(cond_stage_config)
         if permuter_config is None:
             permuter_config = {"target": "taming.modules.transformer.permuter.Identity"}
         self.permuter = instantiate_from_config(config=permuter_config)
@@ -43,7 +43,7 @@ class MultiStageTransformer(pl.LightningModule):
 
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-        self.downsample_cond_size = downsample_cond_size
+        # self.downsample_cond_size = downsample_cond_size
         self.pkeep = pkeep
         self.hier = hier
 
@@ -63,26 +63,26 @@ class MultiStageTransformer(pl.LightningModule):
         model.train = disabled_train
         self.first_stage_model = model
 
-    def init_cond_stage_from_ckpt(self, config):
-        if config == "__is_first_stage__":
-            print("Using first stage also as cond stage.")
-            self.cond_stage_model = self.first_stage_model
-        elif config == "__is_unconditional__" or self.be_unconditional:
-            print(f"Using no cond stage. Assuming the training is intended to be unconditional. "
-                  f"Prepending {self.sos_token} as a sos token.")
-            self.be_unconditional = True
-            self.cond_stage_key = self.first_stage_key
-            self.cond_stage_model = SOSProvider(self.sos_token)
-        else:
-            model = instantiate_from_config(config)
-            model = model.eval()
-            model.train = disabled_train
-            self.cond_stage_model = model
+    # def init_cond_stage_from_ckpt(self, config):
+    #     if config == "__is_first_stage__":
+    #         print("Using first stage also as cond stage.")
+    #         self.cond_stage_model = self.first_stage_model
+    #     elif config == "__is_unconditional__" or self.be_unconditional:
+    #         print(f"Using no cond stage. Assuming the training is intended to be unconditional. "
+    #               f"Prepending {self.sos_token} as a sos token.")
+    #         self.be_unconditional = True
+    #         self.cond_stage_key = self.first_stage_key
+    #         self.cond_stage_model = SOSProvider(self.sos_token)
+    #     else:
+    #         model = instantiate_from_config(config)
+    #         model = model.eval()
+    #         model.train = disabled_train
+    #         self.cond_stage_model = model
 
-    def forward(self, x, c):
+    def forward(self, x):
         # one step to produce the logits
         _, z_indices = self.encode_to_z(x)
-        _, c_indices = self.encode_to_c(c)
+        # _, c_indices = self.encode_to_c(c)
 
         if self.training and self.pkeep < 1.0:
             mask = torch.bernoulli(self.pkeep*torch.ones(z_indices.shape,
@@ -93,16 +93,15 @@ class MultiStageTransformer(pl.LightningModule):
         else:
             a_indices = z_indices
 
-        cz_indices = torch.cat((c_indices, a_indices), dim=1)
+        cz_indices = a_indices # torch.cat((c_indices, a_indices), dim=1)
 
         # target includes all sequence elements (no need to handle first one
         # differently because we are conditioning)
         target = z_indices
         # make the prediction
-        logits, _ = self.transformer(cz_indices[:, :-1])
+        logits, _ = self.transformer(cz_indices)
         # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
-        logits = logits[:, c_indices.shape[1]-1:]
-
+        # logits = logits[:, c_indices.shape[1]-1:]
         return logits, target
 
     def top_k_logits(self, logits, k):
@@ -112,17 +111,18 @@ class MultiStageTransformer(pl.LightningModule):
         return out
 
     @torch.no_grad()
-    def sample(self, x, c, steps, temperature=1.0, sample=False, top_k=None,
+    def sample(self, x, steps, temperature=1.0, sample=False, top_k=None,
                callback=lambda k: None):
-        x = torch.cat((c,x),dim=1)
+        # x = torch.cat((c,x),dim=1)
+
         block_size = self.transformer.get_block_size()
         assert not self.transformer.training
         if self.pkeep <= 0.0:
             # one pass suffices since input is pure noise anyway
             assert len(x.shape)==2
             noise_shape = (x.shape[0], steps-1)
-            #noise = torch.randint(self.transformer.config.vocab_size, noise_shape).to(x)
-            noise = c.clone()[:,x.shape[1]-c.shape[1]:-1]
+            noise = torch.randint(self.transformer.config.vocab_size, noise_shape).to(x)
+            # noise = c.clone()[:,x.shape[1]-c.shape[1]:-1]
             x = torch.cat((x,noise),dim=1)
             logits, _ = self.transformer(x)
             # take all logits for now and scale by temp
@@ -142,7 +142,7 @@ class MultiStageTransformer(pl.LightningModule):
             else:
                 _, ix = torch.topk(probs, k=1, dim=-1)
             # cut off conditioning
-            x = ix[:, c.shape[1]-1:]
+            # x = ix[:, c.shape[1]-1:]
         else:
             for k in range(steps):
                 callback(k)
@@ -164,7 +164,7 @@ class MultiStageTransformer(pl.LightningModule):
                 # append to the sequence and continue
                 x = torch.cat((x, ix), dim=1)
             # cut off conditioning
-            x = x[:, c.shape[1]:]
+            # x = x[:, c.shape[1]:]
         return x
 
     @torch.no_grad()
@@ -177,14 +177,14 @@ class MultiStageTransformer(pl.LightningModule):
         indices = self.permuter(indices)
         return quant_z, indices
 
-    @torch.no_grad()
-    def encode_to_c(self, c):
-        if self.downsample_cond_size > -1:
-            c = F.interpolate(c, size=(self.downsample_cond_size, self.downsample_cond_size))
-        quant_c, _, [_,_,indices] = self.cond_stage_model.encode(c)
-        if len(indices.shape) > 2:
-            indices = indices.view(c.shape[0], -1)
-        return quant_c, indices
+    # @torch.no_grad()
+    # def encode_to_c(self, c):
+    #     if self.downsample_cond_size > -1:
+    #         c = F.interpolate(c, size=(self.downsample_cond_size, self.downsample_cond_size))
+    #     quant_c, _, [_,_,indices] = self.cond_stage_model.encode(c)
+    #     if len(indices.shape) > 2:
+    #         indices = indices.view(c.shape[0], -1)
+    #     return quant_c, indices
 
     @torch.no_grad()
     def decode_to_img(self, index, zshape):
@@ -222,18 +222,18 @@ class MultiStageTransformer(pl.LightningModule):
 
         N = 4
         if lr_interface:
-            x, c = self.get_xc(batch, N, diffuse=False, upsample_factor=8)
+            x = self.get_xc(batch, N, diffuse=False, upsample_factor=8)
         else:
-            x, c = self.get_xc(batch, N)
+            x = self.get_xc(batch, N)
         x = x.to(device=self.device)
-        c = c.to(device=self.device)
+        # c = c.to(device=self.device)
 
         quant_z, z_indices = self.encode_to_z(x)
-        quant_c, c_indices = self.encode_to_c(c)
+        # quant_c, c_indices = self.encode_to_c(c)
 
         # create a "half"" sample
         z_start_indices = z_indices[:,:z_indices.shape[1]//2]
-        index_sample = self.sample(z_start_indices, c_indices,
+        index_sample = self.sample(z_start_indices, #c_indices,
                                    steps=z_indices.shape[1]-z_start_indices.shape[1],
                                    temperature=temperature if temperature is not None else 1.0,
                                    sample=True,
@@ -243,7 +243,7 @@ class MultiStageTransformer(pl.LightningModule):
 
         # sample
         z_start_indices = z_indices[:, :0]
-        index_sample = self.sample(z_start_indices, c_indices,
+        index_sample = self.sample(z_start_indices, #c_indices,
                                    steps=z_indices.shape[1],
                                    temperature=temperature if temperature is not None else 1.0,
                                    sample=True,
@@ -253,7 +253,7 @@ class MultiStageTransformer(pl.LightningModule):
 
         # det sample
         z_start_indices = z_indices[:, :0]
-        index_sample = self.sample(z_start_indices, c_indices,
+        index_sample = self.sample(z_start_indices, #c_indices,
                                    steps=z_indices.shape[1],
                                    sample=False,
                                    callback=callback if callback is not None else lambda k: None)
@@ -265,32 +265,32 @@ class MultiStageTransformer(pl.LightningModule):
         log["inputs"] = x
         log["reconstructions"] = x_rec
 
-        if self.cond_stage_key in ["objects_bbox", "objects_center_points"]:
-            figure_size = (x_rec.shape[2], x_rec.shape[3])
-            dataset = kwargs["pl_module"].trainer.datamodule.datasets["validation"]
-            label_for_category_no = dataset.get_textual_label_for_category_no
-            plotter = dataset.conditional_builders[self.cond_stage_key].plot
-            log["conditioning"] = torch.zeros_like(log["reconstructions"])
-            for i in range(quant_c.shape[0]):
-                log["conditioning"][i] = plotter(quant_c[i], label_for_category_no, figure_size)
-            log["conditioning_rec"] = log["conditioning"]
-        elif self.cond_stage_key != "image":
-            cond_rec = self.cond_stage_model.decode(quant_c)
-            if self.cond_stage_key == "segmentation":
-                # get image from segmentation mask
-                num_classes = cond_rec.shape[1]
+        # if self.cond_stage_key in ["objects_bbox", "objects_center_points"]:
+        #     figure_size = (x_rec.shape[2], x_rec.shape[3])
+        #     dataset = kwargs["pl_module"].trainer.datamodule.datasets["validation"]
+        #     label_for_category_no = dataset.get_textual_label_for_category_no
+        #     plotter = dataset.conditional_builders[self.cond_stage_key].plot
+        #     log["conditioning"] = torch.zeros_like(log["reconstructions"])
+        #     for i in range(quant_c.shape[0]):
+        #         log["conditioning"][i] = plotter(quant_c[i], label_for_category_no, figure_size)
+        #     log["conditioning_rec"] = log["conditioning"]
+        # elif self.cond_stage_key != "image":
+        #     cond_rec = self.cond_stage_model.decode(quant_c)
+        #     if self.cond_stage_key == "segmentation":
+        #         # get image from segmentation mask
+        #         num_classes = cond_rec.shape[1]
 
-                c = torch.argmax(c, dim=1, keepdim=True)
-                c = F.one_hot(c, num_classes=num_classes)
-                c = c.squeeze(1).permute(0, 3, 1, 2).float()
-                c = self.cond_stage_model.to_rgb(c)
+        #         c = torch.argmax(c, dim=1, keepdim=True)
+        #         c = F.one_hot(c, num_classes=num_classes)
+        #         c = c.squeeze(1).permute(0, 3, 1, 2).float()
+        #         c = self.cond_stage_model.to_rgb(c)
 
-                cond_rec = torch.argmax(cond_rec, dim=1, keepdim=True)
-                cond_rec = F.one_hot(cond_rec, num_classes=num_classes)
-                cond_rec = cond_rec.squeeze(1).permute(0, 3, 1, 2).float()
-                cond_rec = self.cond_stage_model.to_rgb(cond_rec)
-            log["conditioning_rec"] = cond_rec
-            log["conditioning"] = c
+        #         cond_rec = torch.argmax(cond_rec, dim=1, keepdim=True)
+        #         cond_rec = F.one_hot(cond_rec, num_classes=num_classes)
+        #         cond_rec = cond_rec.squeeze(1).permute(0, 3, 1, 2).float()
+        #         cond_rec = self.cond_stage_model.to_rgb(cond_rec)
+        #     log["conditioning_rec"] = cond_rec
+        #     log["conditioning"] = c
 
         log["samples_half"] = x_sample
         log["samples_nopix"] = x_sample_nopix
@@ -309,15 +309,15 @@ class MultiStageTransformer(pl.LightningModule):
 
     def get_xc(self, batch, N=None):
         x = self.get_input(self.first_stage_key, batch)
-        c = self.get_input(self.cond_stage_key, batch)
+        # c = self.get_input(self.cond_stage_key, batch)
         if N is not None:
             x = x[:N]
-            c = c[:N]
-        return x, c
+            # c = c[:N]
+        return x #,c
 
     def shared_step(self, batch, batch_idx):
-        x, c = self.get_xc(batch)
-        logits, target = self(x, c)
+        x = self.get_xc(batch)
+        logits, target = self(x)
         loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
         return loss
 

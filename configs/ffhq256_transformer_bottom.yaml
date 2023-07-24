@@ -3,7 +3,7 @@ model:
   target: taming.models.multistage_transformer.MultiStageTransformer
   params:
     hier: bottom
-    cond_stage_key: coord
+    # cond_stage_key: coord
     transformer_config:
       target: taming.modules.transformer.mingpt.GPT
       params:
@@ -39,11 +39,11 @@ model:
           beta: 0.25
         lossconfig:
           target: taming.modules.losses.DummyLoss
-    cond_stage_config:
-      target: taming.modules.misc.coord.CoordStage
-      params:
-        n_embed: 512
-        down_factor: 16
+    # cond_stage_config:
+    #   target: taming.modules.misc.coord.CoordStage
+    #   params:
+    #     n_embed: 512
+    #     down_factor: 16
 
 data:
   target: main.DataModuleFromConfig
