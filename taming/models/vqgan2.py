@@ -139,7 +139,6 @@ class HierarchicalVQModel(pl.LightningModule):
         return quant_b, id_b
 
     def decode(self, quant_t, quant_b):
-        print(quant_t)
         upsample_t = self.upsample_t(quant_t)
         quant = torch.cat([upsample_t, quant_b], 1)
         dec = self.decoder(quant)

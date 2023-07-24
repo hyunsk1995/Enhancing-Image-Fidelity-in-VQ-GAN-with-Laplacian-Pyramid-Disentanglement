@@ -40,7 +40,8 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         scale_factor = 1.0
         quant_zt, zt_indices = top_model.encode_to_z(x)
         quant_zb, zb_indices = bottom_model.encode_to_z(x)
-        quant_c, c_indices = top_model.encode_to_c(c)
+        quant_ct, ct_indices = top_model.encode_to_c(c)
+        quant_cb, cb_indices = bottom_model.encode_to_c(c)
 
         cshape_t = quant_zt.shape
         cshape_b = quant_zb.shape
@@ -79,8 +80,11 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         start_ib = start//cshape_b[3]
         start_jb = start %cshape_b[3]
 
-        cidx = c_indices
-        cidx = cidx.reshape(quant_c.shape[0],quant_c.shape[2],quant_c.shape[3])
+        cidx_t = ct_indices
+        cidx_t = cidx_t.reshape(quant_ct.shape[0],quant_ct.shape[2],quant_ct.shape[3])
+
+        cidx_b = cb_indices
+        cidx_b = cidx_b.reshape(quant_cb.shape[0],quant_cb.shape[2],quant_cb.shape[3])
 
         sample = True
 
@@ -105,7 +109,7 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
                 j_end = j_start+16
                 patch = t_idx[:,i_start:i_end,j_start:j_end]
                 patch = patch.reshape(patch.shape[0],-1)
-                cpatch = cidx[:, i_start:i_end, j_start:j_end]
+                cpatch = cidx_t[:, i_start:i_end, j_start:j_end]
                 cpatch = cpatch.reshape(cpatch.shape[0], -1)
                 patch = torch.cat((cpatch, patch), dim=1)
                 logits,_ = top_model.transformer(patch[:,:-1])
@@ -147,7 +151,7 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
                 j_end = j_start+16
                 patch = b_idx[:,i_start:i_end,j_start:j_end]
                 patch = patch.reshape(patch.shape[0],-1)
-                cpatch = cidx[:, i_start:i_end, j_start:j_end]
+                cpatch = cidx_b[:, i_start:i_end, j_start:j_end]
                 cpatch = cpatch.reshape(cpatch.shape[0], -1)
                 patch = torch.cat((cpatch, patch), dim=1)
                 logits,_ = top_model.transformer(patch[:,:-1])
