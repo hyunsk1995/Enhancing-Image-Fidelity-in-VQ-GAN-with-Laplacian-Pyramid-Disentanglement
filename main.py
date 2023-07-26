@@ -252,6 +252,7 @@ class ImageLogger(Callback):
     @rank_zero_only
     def log_local(self, save_dir, split, images,
                   global_step, current_epoch, batch_idx):
+        print("save_images")
         root = os.path.join(save_dir, "images", split)
         for k in images:
             grid = torchvision.utils.make_grid(images[k], nrow=4)

@@ -35,6 +35,7 @@ class MultiStageTransformer(pl.LightningModule):
         self.first_stage_key = first_stage_key
         self.cond_stage_key = cond_stage_key
         self.init_first_stage_from_ckpt(first_stage_config)
+        # self.init_cond_stage_from_ckpt("__is_unconditional__")
         self.init_cond_stage_from_ckpt(cond_stage_config)
         if permuter_config is None:
             permuter_config = {"target": "taming.modules.transformer.permuter.Identity"}
@@ -242,22 +243,22 @@ class MultiStageTransformer(pl.LightningModule):
         x_sample = self.decode_to_img(index_sample, quant_z.shape)
 
         # sample
-        z_start_indices = z_indices[:, :0]
-        index_sample = self.sample(z_start_indices, c_indices,
-                                   steps=z_indices.shape[1],
-                                   temperature=temperature if temperature is not None else 1.0,
-                                   sample=True,
-                                   top_k=top_k if top_k is not None else 100,
-                                   callback=callback if callback is not None else lambda k: None)
-        x_sample_nopix = self.decode_to_img(index_sample, quant_z.shape)
+        # z_start_indices = z_indices[:, :0]
+        # index_sample = self.sample(z_start_indices, c_indices,
+        #                            steps=z_indices.shape[1],
+        #                            temperature=temperature if temperature is not None else 1.0,
+        #                            sample=True,
+        #                            top_k=top_k if top_k is not None else 100,
+        #                            callback=callback if callback is not None else lambda k: None)
+        # x_sample_nopix = self.decode_to_img(index_sample, quant_z.shape)
 
-        # det sample
-        z_start_indices = z_indices[:, :0]
-        index_sample = self.sample(z_start_indices, c_indices,
-                                   steps=z_indices.shape[1],
-                                   sample=False,
-                                   callback=callback if callback is not None else lambda k: None)
-        x_sample_det = self.decode_to_img(index_sample, quant_z.shape)
+        # # det sample
+        # z_start_indices = z_indices[:, :0]
+        # index_sample = self.sample(z_start_indices, c_indices,
+        #                            steps=z_indices.shape[1],
+        #                            sample=False,
+        #                            callback=callback if callback is not None else lambda k: None)
+        # x_sample_det = self.decode_to_img(index_sample, quant_z.shape)
 
         # reconstruction
         x_rec = self.decode_to_img(z_indices, quant_z.shape)
