@@ -19,7 +19,7 @@ def chw_to_pillow(x):
 
 
 @torch.no_grad()
-def sample_classconditional(model, batch_size, class_label, steps=256, temperature=None, top_k=None, callback=None,
+def sample_classconditional(top_model, bottom_model, batch_size, class_label, steps=256, temperature=None, top_k=None, callback=None,
                             dim_z=256, h=16, w=16, verbose_time=False, top_p=None):
     log = dict()
     assert type(class_label) == int, f'expecting type int but type is {type(class_label)}'
@@ -40,7 +40,7 @@ def sample_classconditional(model, batch_size, class_label, steps=256, temperatu
 
 
 @torch.no_grad()
-def sample_unconditional(model, batch_size, steps=256, temperature=None, top_k=None, top_p=None, callback=None,
+def sample_unconditional(top_model, bottom_model,batch_size, steps=256, temperature=None, top_k=None, top_p=None, callback=None,
                          dim_z=256, h=16, w=16, verbose_time=False):
     log = dict()
     qzshape = [batch_size, dim_z, h, w]
@@ -59,9 +59,12 @@ def sample_unconditional(model, batch_size, steps=256, temperature=None, top_k=N
 
 
 @torch.no_grad()
-def run(logdir, model, batch_size, temperature, top_k, unconditional=True, num_samples=50000,
+def run(logdir, top_model, bottom_model, batch_size, temperature, top_k, unconditional=True, num_samples=50000,
         given_classes=None, top_p=None):
     batches = [batch_size for _ in range(num_samples//batch_size)] + [num_samples % batch_size]
+    
+    # unconditional = True
+    
     if not unconditional:
         assert given_classes is not None
         print("Running in pure class-conditional sampling mode. I will produce "
@@ -70,14 +73,14 @@ def run(logdir, model, batch_size, temperature, top_k, unconditional=True, num_s
         for class_label in tqdm(given_classes, desc="Classes"):
             for n, bs in tqdm(enumerate(batches), desc="Sampling Class"):
                 if bs == 0: break
-                logs = sample_classconditional(model, batch_size=bs, class_label=class_label,
+                logs = sample_classconditional(top_model, bottom_model, batch_size=bs, class_label=class_label,
                                                temperature=temperature, top_k=top_k, top_p=top_p)
                 save_from_logs(logs, logdir, base_count=n * batch_size, cond_key=logs["class_label"])
     else:
         print(f"Running in unconditional sampling mode, producing {num_samples} samples.")
         for n, bs in tqdm(enumerate(batches), desc="Sampling"):
             if bs == 0: break
-            logs = sample_unconditional(model, batch_size=bs, temperature=temperature, top_k=top_k, top_p=top_p)
+            logs = sample_unconditional(top_model, bottom_model, batch_size=bs, temperature=temperature, top_k=top_k, top_p=top_p)
             save_from_logs(logs, logdir, base_count=n * batch_size)
 
 
@@ -107,12 +110,24 @@ def get_parser():
             raise argparse.ArgumentTypeError("Boolean value expected.")
 
     parser = argparse.ArgumentParser()
+    # parser.add_argument(
+    #     "-r",
+    #     "--resume",
+    #     type=str,
+    #     nargs="?",
+    #     help="load from logdir or checkpoint in logdir",
+    # )
     parser.add_argument(
-        "-r",
-        "--resume",
+        "--top",
         type=str,
         nargs="?",
-        help="load from logdir or checkpoint in logdir",
+        help="load from top checkpoint in logdir",
+    )
+    parser.add_argument(
+        "--bottom",
+        type=str,
+        nargs="?",
+        help="load from bottom checkpoint in logdir",
     )
     parser.add_argument(
         "-o",
@@ -203,42 +218,50 @@ def load_model(config, ckpt, gpu, eval_mode):
     model = load_model_from_config(config.model, pl_sd["state_dict"], gpu=gpu, eval_mode=eval_mode)["model"]
     return model, global_step
 
+def get_config(resume, base):
+    ckpt = None
+    if not os.path.exists(resume):
+        raise ValueError("Cannot find {}".format(resume))
+    if os.path.isfile(resume):
+        paths = resume.split("/")
+        try:
+            idx = len(paths)-paths[::-1].index("logs")+1
+        except ValueError:
+            idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
+        logdir = "/".join(paths[:idx])
+        ckpt = resume
+    else:
+        assert os.path.isdir(resume), resume
+        logdir = opt.resume.rstrip("/")
+        ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
+
+    base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
+    base_configs = base_configs + base
+
+    configs = [OmegaConf.load(cfg) for cfg in base_configs]
+    cli = OmegaConf.from_dotlist(unknown)
+    config = OmegaConf.merge(*configs, cli)
+
+    return config, ckpt
+
 
 if __name__ == "__main__":
     sys.path.append(os.getcwd())
     parser = get_parser()
 
     opt, unknown = parser.parse_known_args()
-    assert opt.resume
+    assert opt.top
+    assert opt.bottom
 
-    ckpt = None
+    top_config, top_ckpt = get_config(opt.top, opt.base)
+    bottom_config, bottom_ckpt = get_config(opt.bottom, opt.base)
+    print(top_config, bottom_config)
 
-    if not os.path.exists(opt.resume):
-        raise ValueError("Cannot find {}".format(opt.resume))
-    if os.path.isfile(opt.resume):
-        paths = opt.resume.split("/")
-        try:
-            idx = len(paths)-paths[::-1].index("logs")+1
-        except ValueError:
-            idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
-        logdir = "/".join(paths[:idx])
-        ckpt = opt.resume
-    else:
-        assert os.path.isdir(opt.resume), opt.resume
-        logdir = opt.resume.rstrip("/")
-        ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
-
-    base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
-    opt.base = base_configs+opt.base
-
-    configs = [OmegaConf.load(cfg) for cfg in opt.base]
-    cli = OmegaConf.from_dotlist(unknown)
-    config = OmegaConf.merge(*configs, cli)
-
-    model, global_step = load_model(config, ckpt, gpu=True, eval_mode=True)
+    top_model, top_gs = load_model(top_config, top_ckpt, gpu=True, eval_mode=True)
+    bottom_model, bottom_gs = load_model(bottom_config, bottom_ckpt, gpu=True, eval_mode=True)
 
     if opt.outdir:
-        print(f"Switching logdir from '{logdir}' to '{opt.outdir}'")
+        # print(f"Switching logdir from '{logdir}' to '{opt.outdir}'")
         logdir = opt.outdir
 
     if opt.classes == "imagenet":
@@ -249,12 +272,12 @@ if __name__ == "__main__":
         given_classes = [int(c) for c in cls_str.split(",")]
 
     logdir = os.path.join(logdir, "samples", f"top_k_{opt.top_k}_temp_{opt.temperature:.2f}_top_p_{opt.top_p}",
-                          f"{global_step}")
+                          f"top_{top_gs}_bottom_{bottom_gs}")
 
     print(f"Logging to {logdir}")
     os.makedirs(logdir, exist_ok=True)
 
-    run(logdir, model, opt.batch_size, opt.temperature, opt.top_k, unconditional=model.be_unconditional,
+    run(logdir, top_model, bottom_model, opt.batch_size, opt.temperature, opt.top_k, unconditional=top_model.be_unconditional,
         given_classes=given_classes, num_samples=opt.num_samples, top_p=opt.top_p)
 
     print("done.")

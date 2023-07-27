@@ -15,6 +15,34 @@ def save_image(x, path):
     x = ((x.detach().cpu().numpy().transpose(1,2,0)+1.0)*127.5).clip(0,255).astype(np.uint8)
     Image.fromarray(x).save(path)
 
+# logits : (B, hw, vocab_size)
+def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
+    sample = True
+
+    for i in range(start_i, qshape[2]):
+        for j in range(start_j, qshape[3]):
+            print("i, j:", i, j)
+            cx = torch.cat((cidx, idx), dim=1)
+            logits, _ = model.transformer(cx[:,:-1]) # (B, block_size, vocab_size)
+
+            logits = logits[:, -qshape[2]*qshape[3]:, :]
+            logits = logits[:, i*qshape[2]+j, :]
+            logits /= temperature
+
+            if top_k is not None:
+                logits = model.top_k_logits(logits, top_k)
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+
+            if sample:
+                ix = torch.multinomial(probs, num_samples=1)
+            else:
+                _, ix = torch.topk(probs, k=1, dim=-1)
+            
+            idx[:,i*qshape[2]+j] = ix
+        
+    idx = idx.reshape(qshape[0], qshape[2], qshape[3])
+
+    return idx
 
 @torch.no_grad()
 def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, batch_size=1):
@@ -42,8 +70,8 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         quant_ct, ct_indices = top_model.encode_to_c(c)
         quant_cb, cb_indices = bottom_model.encode_to_c(c)
 
-        cshape_t = quant_zt.shape
-        cshape_b = quant_zb.shape
+        qshape_t = quant_zt.shape
+        qshape_b = quant_zb.shape
 
         xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
         for i in range(xrec.shape[0]):
@@ -60,7 +88,6 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
 
         t_idx = zt_indices
         b_idx = zb_indices
-
         half_sample = True
         if half_sample:
             start_t = t_idx.shape[1]//2
@@ -70,107 +97,19 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
             start_b = 0
 
         t_idx[:,start_t:] = 0
-        t_idx = t_idx.reshape(cshape_t[0],cshape_t[2],cshape_t[3])
-        start_it = start_t//cshape_t[3]
-        start_jt = start_t %cshape_t[3]
+        # t_idx = t_idx.reshape(qshape_t[0],qshape_t[2],qshape_t[3])
+        start_it = start_t//qshape_t[3]
+        start_jt = start_t %qshape_t[3]
 
         b_idx[:,start_b:] = 0
-        b_idx = b_idx.reshape(cshape_b[0],cshape_b[2],cshape_b[3])
-        start_ib = start_b//cshape_b[3]
-        start_jb = start_b %cshape_b[3]
+        # b_idx = b_idx.reshape(qshape_b[0],qshape_b[2],qshape_b[3])
+        start_ib = start_b//qshape_b[3]
+        start_jb = start_b %qshape_b[3]
 
-        cidx_t = ct_indices
-        cidx_t = cidx_t.reshape(quant_ct.shape[0],quant_ct.shape[2],quant_ct.shape[3])
-        cidx_b = cb_indices
-        cidx_b = cidx_b.reshape(quant_cb.shape[0],quant_cb.shape[2],quant_cb.shape[3])
+        t_idx = AR_modeling(top_model, t_idx, ct_indices, start_it, start_jt, qshape_t, temperature, top_k)
+        b_idx = AR_modeling(bottom_model, b_idx, cb_indices, start_ib, start_jb, qshape_b, temperature, top_k)
 
-        sample = True
-
-        for i in range(start_it,cshape_t[2]-0):
-            if i <= 8:
-                local_i = i
-            elif cshape_t[2]-i < 8:
-                local_i = 16-(cshape_t[2]-i)
-            else:
-                local_i = 8
-            for j in range(start_jt,cshape_t[3]-0):
-                if j <= 8:
-                    local_j = j
-                elif cshape_t[3]-j < 8:
-                    local_j = 16-(cshape_t[3]-j)
-                else:
-                    local_j = 8
-
-                i_start = i-local_i
-                i_end = i_start+16
-                j_start = j-local_j
-                j_end = j_start+16
-                patch = t_idx[:,i_start:i_end,j_start:j_end]
-                patch = patch.reshape(patch.shape[0],-1)
-                cpatch = cidx_t[:, i_start:i_end, j_start:j_end]
-                cpatch = cpatch.reshape(cpatch.shape[0], -1)
-                patch = torch.cat((cpatch, patch), dim=1)
-                logits,_ = top_model.transformer(patch[:,:-1])
-                logits = logits[:, -256:, :]
-                logits = logits.reshape(cshape_t[0],16,16,-1)
-                logits = logits[:,local_i,local_j,:]
-
-                logits = logits/temperature
-
-                if top_k is not None:
-                    logits = top_model.top_k_logits(logits, top_k)
-                # apply softmax to convert to probabilities
-                probs = torch.nn.functional.softmax(logits, dim=-1)
-                # sample from the distribution or take the most likely
-                if sample:
-                    ix = torch.multinomial(probs, num_samples=1)
-                else:
-                    _, ix = torch.topk(probs, k=1, dim=-1)
-                t_idx[:,i,j] = ix
-
-        for i in range(start_ib,cshape_b[2]-0):
-            if i <= 8:
-                local_i = i
-            elif cshape_b[2]-i < 8:
-                local_i = 16-(cshape_b[2]-i)
-            else:
-                local_i = 8
-            for j in range(start_jb,cshape_b[3]-0):
-                if j <= 8:
-                    local_j = j
-                elif cshape_b[3]-j < 8:
-                    local_j = 16-(cshape_b[3]-j)
-                else:
-                    local_j = 8
-
-                i_start = i-local_i
-                i_end = i_start+16
-                j_start = j-local_j
-                j_end = j_start+16
-                patch = b_idx[:,i_start:i_end,j_start:j_end]
-                patch = patch.reshape(patch.shape[0],-1)
-                cpatch = cidx_b[:, i_start:i_end, j_start:j_end]
-                cpatch = cpatch.reshape(cpatch.shape[0], -1)
-                patch = torch.cat((cpatch, patch), dim=1)
-                logits,_ = bottom_model.transformer(patch[:,:-1])
-                logits = logits[:, -256:, :]
-                logits = logits.reshape(cshape_b[0],16,16,-1)
-                logits = logits[:,local_i,local_j,:]
-
-                logits = logits/temperature
-
-                if top_k is not None:
-                    logits = bottom_model.top_k_logits(logits, top_k)
-                # apply softmax to convert to probabilities
-                probs = torch.nn.functional.softmax(logits, dim=-1)
-                # sample from the distribution or take the most likely
-                if sample:
-                    ix = torch.multinomial(probs, num_samples=1)
-                else:
-                    _, ix = torch.topk(probs, k=1, dim=-1)
-                b_idx[:,i,j] = ix
-
-        xsample = top_model.decode_full_img(t_idx[:,:cshape_t[2],:cshape_t[3]], b_idx[:,:cshape_b[2],:cshape_b[3]], cshape_t, cshape_b)
+        xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
         for i in range(xsample.shape[0]):
             save_image(xsample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))

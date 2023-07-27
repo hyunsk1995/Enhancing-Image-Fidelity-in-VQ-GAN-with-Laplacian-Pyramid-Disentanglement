@@ -3,7 +3,7 @@ import torch
 import numpy as np
 from omegaconf import OmegaConf
 import streamlit as st
-from streamlit import caching
+# from streamlit import caching
 from PIL import Image
 from main import instantiate_from_config, DataModuleFromConfig
 from torch.utils.data import DataLoader
@@ -53,7 +53,7 @@ def pad_to_M(x, M):
     return x
 
 @torch.no_grad()
-def run_conditional(model, dsets):
+def run_conditional(top_model, bottom_model, dsets):
     if len(dsets.datasets) > 1:
         split = st.sidebar.radio("Split", sorted(dsets.datasets.keys()))
         dset = dsets.datasets[split]
@@ -67,10 +67,10 @@ def run_conditional(model, dsets):
 
     example = default_collate([dset[i] for i in indices])
 
-    x = model.get_input("image", example).to(model.device)
+    x = top_model.get_input("image", example).to(top_model.device)
 
-    cond_key = model.cond_stage_key
-    c = model.get_input(cond_key, example).to(model.device)
+    cond_key = top_model.cond_stage_key
+    c = top_model.get_input(cond_key, example).to(top_model.device)
 
     scale_factor = st.sidebar.slider("Scale Factor", min_value=0.5, max_value=4.0, step=0.25, value=1.00)
     if scale_factor != 1.0:
@@ -204,12 +204,24 @@ def run_conditional(model, dsets):
 
 def get_parser():
     parser = argparse.ArgumentParser()
+    # parser.add_argument(
+    #     "-r",
+    #     "--resume",
+    #     type=str,
+    #     nargs="?",
+    #     help="load from logdir or checkpoint in logdir",
+    # )
     parser.add_argument(
-        "-r",
-        "--resume",
+        "--top",
         type=str,
         nargs="?",
-        help="load from logdir or checkpoint in logdir",
+        help="load from top checkpoint in logdir",
+    )
+    parser.add_argument(
+        "--bottom",
+        type=str,
+        nargs="?",
+        help="load from bottom checkpoint in logdir",
     )
     parser.add_argument(
         "-b",
@@ -277,12 +289,7 @@ def get_data(config):
     return data
 
 
-@st.cache(allow_output_mutation=True, suppress_st_warning=True)
-def load_model_and_dset(config, ckpt, gpu, eval_mode):
-    # get data
-    dsets = get_data(config)   # calls data.config ...
-
-    # now load the specified checkpoint
+def load_model(config, ckpt):
     if ckpt:
         pl_sd = torch.load(ckpt, map_location="cpu")
         global_step = pl_sd["global_step"]
@@ -293,50 +300,70 @@ def load_model_and_dset(config, ckpt, gpu, eval_mode):
                                    pl_sd["state_dict"],
                                    gpu=gpu,
                                    eval_mode=eval_mode)["model"]
-    return dsets, model, global_step
+    return model, global_step
+
+@st.cache(allow_output_mutation=True, suppress_st_warning=True)
+def load_model_and_dset(top_config, top_ckpt, bottom_config, bottom_ckpt, gpu, eval_mode):
+    # get data
+    dsets = get_data(top_config)   # calls data.config ...
+
+    # now load the specified checkpoint
+    top_model, top_gs = load_model(top_config, top_ckpt)
+    bottom_model, bottom_gs = load_model(bottom_config, bottom_ckpt)
+
+    return dsets, top_model, top_gs, bottom_model, bottom_gs
 
 
-if __name__ == "__main__":
-    sys.path.append(os.getcwd())
-
-    parser = get_parser()
-
-    opt, unknown = parser.parse_known_args()
-
+def get_config(resume, base, config):
     ckpt = None
-    if opt.resume:
-        if not os.path.exists(opt.resume):
-            raise ValueError("Cannot find {}".format(opt.resume))
-        if os.path.isfile(opt.resume):
-            paths = opt.resume.split("/")
-            try:
-                idx = len(paths)-paths[::-1].index("logs")+1
-            except ValueError:
-                idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
-            logdir = "/".join(paths[:idx])
-            ckpt = opt.resume
-        else:
-            assert os.path.isdir(opt.resume), opt.resume
-            logdir = opt.resume.rstrip("/")
-            ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
-        print(f"logdir:{logdir}")
-        base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
-        opt.base = base_configs+opt.base
+    if not os.path.exists(resume):
+        raise ValueError("Cannot find {}".format(resume))
+    if os.path.isfile(resume):
+        paths = resume.split("/")
+        try:
+            idx = len(paths)-paths[::-1].index("logs")+1
+        except ValueError:
+            idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
+        logdir = "/".join(paths[:idx])
+        ckpt = resume
+    else:
+        assert os.path.isdir(resume), resume
+        logdir = opt.resume.rstrip("/")
+        ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
 
-    if opt.config:
-        if type(opt.config) == str:
-            opt.base = [opt.config]
+    base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
+    base = base_configs + base
+
+    if config:
+        if type(config) == str:
+            base = [config]
         else:
-            opt.base = [opt.base[-1]]
+            base = [base[-1]]
 
     configs = [OmegaConf.load(cfg) for cfg in opt.base]
     cli = OmegaConf.from_dotlist(unknown)
+
     if opt.ignore_base_data:
         for config in configs:
             if hasattr(config, "data"): del config["data"]
     config = OmegaConf.merge(*configs, cli)
 
-    st.sidebar.text(ckpt)
+    return config, ckpt
+
+if __name__ == "__main__":
+    sys.path.append(os.getcwd())
+
+    parser = get_parser()
+    opt, unknown = parser.parse_known_args()
+
+    assert opt.top
+    assert opt.bottom
+
+    top_config, top_ckpt = get_config(opt.top, opt.base, opt.config)
+    bottom_config, bottom_ckpt = get_config(opt.bottom, opt.base, opt.config)
+
+    st.sidebar.text(top_ckpt)
+    st.sidebar.text(bottom_ckpt)
     gs = st.sidebar.empty()
     gs.text(f"Global step: ?")
     st.sidebar.text("Options")
@@ -350,6 +377,7 @@ if __name__ == "__main__":
         st.info("Checkpoint: {}".format(ckpt))
         st.json(OmegaConf.to_container(config))
 
-    dsets, model, global_step = load_model_and_dset(config, ckpt, gpu, eval_mode)
-    gs.text(f"Global step: {global_step}")
-    run_conditional(model, dsets)
+    dsets, top_model, top_gs, bottom_model, bottom_gs = load_model_and_dset(top_config, top_ckpt, bottom_config, bottom_ckpt, gpu, eval_mode)
+    gs.text(f"Top global step: {top_gs}")
+    gs.text(f"Bottom global step: {bottom_gs}")
+    run_conditional(top_model, bottom_model, dsets)
