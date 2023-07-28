@@ -197,7 +197,7 @@ class MultiStageTransformer(pl.LightningModule):
         elif self.hier == "bottom":
             quant_z = self.first_stage_model.quantize_b.get_codebook_entry(
                 index.reshape(-1), shape=bhwc)
-            x = self.first_stage_model.decoder(quant_z)
+            x = self.first_stage_model.decoder_b(quant_z)
         
         return x
 
@@ -227,22 +227,22 @@ class MultiStageTransformer(pl.LightningModule):
         x_sample = self.decode_to_img(index_sample, quant_z.shape)
 
         # sample
-        z_start_indices = z_indices[:, :0]
-        index_sample = self.sample(z_start_indices, c_indices,
-                                   steps=z_indices.shape[1],
-                                   temperature=temperature if temperature is not None else 1.0,
-                                   sample=True,
-                                   top_k=top_k if top_k is not None else 100,
-                                   callback=callback if callback is not None else lambda k: None)
-        x_sample_nopix = self.decode_to_img(index_sample, quant_z.shape)
+        # z_start_indices = z_indices[:, :0]
+        # index_sample = self.sample(z_start_indices, c_indices,
+        #                            steps=z_indices.shape[1],
+        #                            temperature=temperature if temperature is not None else 1.0,
+        #                            sample=True,
+        #                            top_k=top_k if top_k is not None else 100,
+        #                            callback=callback if callback is not None else lambda k: None)
+        # x_sample_nopix = self.decode_to_img(index_sample, quant_z.shape)
 
         # det sample
-        z_start_indices = z_indices[:, :0]
-        index_sample = self.sample(z_start_indices, c_indices,
-                                   steps=z_indices.shape[1],
-                                   sample=False,
-                                   callback=callback if callback is not None else lambda k: None)
-        x_sample_det = self.decode_to_img(index_sample, quant_z.shape)
+        # z_start_indices = z_indices[:, :0]
+        # index_sample = self.sample(z_start_indices, c_indices,
+        #                            steps=z_indices.shape[1],
+        #                            sample=False,
+        #                            callback=callback if callback is not None else lambda k: None)
+        # x_sample_det = self.decode_to_img(index_sample, quant_z.shape)
 
         # reconstruction
         x_rec = self.decode_to_img(z_indices, quant_z.shape)
@@ -278,8 +278,8 @@ class MultiStageTransformer(pl.LightningModule):
             log["conditioning"] = c
 
         log["samples_half"] = x_sample
-        log["samples_nopix"] = x_sample_nopix
-        log["samples_det"] = x_sample_det
+        # log["samples_nopix"] = x_sample_nopix
+        # log["samples_det"] = x_sample_det
         return log
 
     def get_input(self, key, batch):
