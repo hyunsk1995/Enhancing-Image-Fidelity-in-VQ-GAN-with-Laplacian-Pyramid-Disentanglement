@@ -15,9 +15,37 @@ def save_image(x, path):
     x = ((x.detach().cpu().numpy().transpose(1,2,0)+1.0)*127.5).clip(0,255).astype(np.uint8)
     Image.fromarray(x).save(path)
 
+# logits : (B, hw, vocab_size)
+def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
+    sample = True
+
+    for i in range(start_i, qshape[2]):
+        for j in range(start_j, qshape[3]):
+            print("i, j:", i, j)
+            cx = torch.cat((cidx, idx), dim=1)
+            logits, _ = model.transformer(cx[:,:-1]) # (B, block_size, vocab_size)
+
+            logits = logits[:, -qshape[2]*qshape[3]:, :]
+            logits = logits[:, i*qshape[2]+j, :]
+            logits /= temperature
+
+            if top_k is not None:
+                logits = model.top_k_logits(logits, top_k)
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+
+            if sample:
+                ix = torch.multinomial(probs, num_samples=1)
+            else:
+                _, ix = torch.topk(probs, k=1, dim=-1)
+            
+            idx[:,i*qshape[2]+j] = ix
+        
+    idx = idx.reshape(qshape[0], qshape[2], qshape[3])
+
+    return idx
 
 @torch.no_grad()
-def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
+def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, batch_size=1):
     if len(dsets.datasets) > 1:
         split = sorted(dsets.datasets.keys())[0]
         dset = dsets.datasets[split]
@@ -28,94 +56,60 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
         indices = list(range(start_idx, start_idx+batch_size))
         example = default_collate([dset[i] for i in indices])
 
-        x = model.get_input("image", example).to(model.device)
+        x = top_model.get_input("image", example).to(top_model.device)
         for i in range(x.shape[0]):
             save_image(x[i], os.path.join(outdir, "originals",
                                           "{:06}.png".format(indices[i])))
 
-        cond_key = model.cond_stage_key
-        c = model.get_input(cond_key, example).to(model.device)
+        cond_key = top_model.cond_stage_key
+        c = top_model.get_input(cond_key, example).to(top_model.device)
 
         scale_factor = 1.0
-        quant_z, z_indices = model.encode_to_z(x)
-        quant_c, c_indices = model.encode_to_c(c)
+        quant_zt, zt_indices = top_model.encode_to_z(x)
+        quant_zb, zb_indices = bottom_model.encode_to_z(x)
+        quant_ct, ct_indices = top_model.encode_to_c(c)
+        quant_cb, cb_indices = bottom_model.encode_to_c(c)
 
-        cshape = quant_z.shape
+        qshape_t = quant_zt.shape
+        qshape_b = quant_zb.shape
 
-        xrec = model.first_stage_model.decode(quant_z)
+        xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
         for i in range(xrec.shape[0]):
             save_image(xrec[i], os.path.join(outdir, "reconstructions",
                                              "{:06}.png".format(indices[i])))
 
-        if cond_key == "segmentation":
-            # get image from segmentation mask
-            num_classes = c.shape[1]
-            c = torch.argmax(c, dim=1, keepdim=True)
-            c = torch.nn.functional.one_hot(c, num_classes=num_classes)
-            c = c.squeeze(1).permute(0, 3, 1, 2).float()
-            c = model.cond_stage_model.to_rgb(c)
+        # if cond_key == "segmentation":
+        #     # get image from segmentation mask
+        #     num_classes = c.shape[1]
+        #     c = torch.argmax(c, dim=1, keepdim=True)
+        #     c = torch.nn.functional.one_hot(c, num_classes=num_classes)
+        #     c = c.squeeze(1).permute(0, 3, 1, 2).float()
+        #     c = model.cond_stage_model.to_rgb(c)
 
-        idx = z_indices
-
-        half_sample = False
+        t_idx = zt_indices
+        b_idx = zb_indices
+        half_sample = True
         if half_sample:
-            start = idx.shape[1]//2
+            start_t = t_idx.shape[1]//2
+            start_b = b_idx.shape[1]//2
         else:
-            start = 0
+            start_t = 0
+            start_b = 0
 
-        idx[:,start:] = 0
-        idx = idx.reshape(cshape[0],cshape[2],cshape[3])
-        start_i = start//cshape[3]
-        start_j = start %cshape[3]
+        t_idx[:,start_t:] = 0
+        # t_idx = t_idx.reshape(qshape_t[0],qshape_t[2],qshape_t[3])
+        start_it = start_t//qshape_t[3]
+        start_jt = start_t %qshape_t[3]
 
-        cidx = c_indices
-        cidx = cidx.reshape(quant_c.shape[0],quant_c.shape[2],quant_c.shape[3])
+        b_idx[:,start_b:] = 0
+        # b_idx = b_idx.reshape(qshape_b[0],qshape_b[2],qshape_b[3])
+        start_ib = start_b//qshape_b[3]
+        start_jb = start_b %qshape_b[3]
 
-        sample = True
+        t_idx = AR_modeling(top_model, t_idx, ct_indices, start_it, start_jt, qshape_t, temperature, top_k)
+        b_idx = AR_modeling(bottom_model, b_idx, cb_indices, start_ib, start_jb, qshape_b, temperature, top_k)
 
-        for i in range(start_i,cshape[2]-0):
-            if i <= 8:
-                local_i = i
-            elif cshape[2]-i < 8:
-                local_i = 16-(cshape[2]-i)
-            else:
-                local_i = 8
-            for j in range(start_j,cshape[3]-0):
-                if j <= 8:
-                    local_j = j
-                elif cshape[3]-j < 8:
-                    local_j = 16-(cshape[3]-j)
-                else:
-                    local_j = 8
-
-                i_start = i-local_i
-                i_end = i_start+16
-                j_start = j-local_j
-                j_end = j_start+16
-                patch = idx[:,i_start:i_end,j_start:j_end]
-                patch = patch.reshape(patch.shape[0],-1)
-                cpatch = cidx[:, i_start:i_end, j_start:j_end]
-                cpatch = cpatch.reshape(cpatch.shape[0], -1)
-                patch = torch.cat((cpatch, patch), dim=1)
-                logits,_ = model.transformer(patch[:,:-1])
-                logits = logits[:, -256:, :]
-                logits = logits.reshape(cshape[0],16,16,-1)
-                logits = logits[:,local_i,local_j,:]
-
-                logits = logits/temperature
-
-                if top_k is not None:
-                    logits = model.top_k_logits(logits, top_k)
-                # apply softmax to convert to probabilities
-                probs = torch.nn.functional.softmax(logits, dim=-1)
-                # sample from the distribution or take the most likely
-                if sample:
-                    ix = torch.multinomial(probs, num_samples=1)
-                else:
-                    _, ix = torch.topk(probs, k=1, dim=-1)
-                idx[:,i,j] = ix
-
-        xsample = model.decode_to_img(idx[:,:cshape[2],:cshape[3]], cshape)
+        xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
         for i in range(xsample.shape[0]):
             save_image(xsample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))
@@ -123,12 +117,24 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
 
 def get_parser():
     parser = argparse.ArgumentParser()
+    # parser.add_argument(
+    #     "-r",
+    #     "--resume",
+    #     type=str,
+    #     nargs="?",
+    #     help="load from logdir or checkpoint in logdir",
+    # )
     parser.add_argument(
-        "-r",
-        "--resume",
+        "--top",
         type=str,
         nargs="?",
-        help="load from logdir or checkpoint in logdir",
+        help="load from top checkpoint in logdir",
+    )
+    parser.add_argument(
+        "--bottom",
+        type=str,
+        nargs="?",
+        help="load from bottom checkpoint in logdir",
     )
     parser.add_argument(
         "-b",
@@ -214,22 +220,34 @@ def get_data(config):
     return data
 
 
-def load_model_and_dset(config, ckpt, gpu, eval_mode):
+def load_model_and_dset(top_config, bottom_config, top_ckpt, bottom_ckpt, gpu, eval_mode):
     # get data
-    dsets = get_data(config)   # calls data.config ...
+    dsets = get_data(top_config)   # calls data.config ...
 
     # now load the specified checkpoint
-    if ckpt:
-        pl_sd = torch.load(ckpt, map_location="cpu")
-        global_step = pl_sd["global_step"]
+    if top_ckpt:
+        pl_sd_top = torch.load(top_ckpt, map_location="cpu")
+        global_step_top = pl_sd_top["global_step"]
     else:
-        pl_sd = {"state_dict": None}
-        global_step = None
-    model = load_model_from_config(config.model,
-                                   pl_sd["state_dict"],
+        pl_sd_top = {"state_dict": None}
+        global_step_top = None
+
+    if bottom_ckpt:
+        pl_sd_bottom = torch.load(bottom_ckpt, map_location="cpu")
+        global_step_bottom = pl_sd_bottom["global_step"]
+    else:
+        pl_sd_bottom = {"state_dict": None}
+        global_step_bottom = None
+
+    top_model = load_model_from_config(top_config.model,
+                                   pl_sd_top["state_dict"],
                                    gpu=gpu,
                                    eval_mode=eval_mode)["model"]
-    return dsets, model, global_step
+    bottom_model = load_model_from_config(bottom_config.model,
+                                   pl_sd_bottom["state_dict"],
+                                   gpu=gpu,
+                                   eval_mode=eval_mode)["model"]
+    return dsets, top_model, bottom_model, global_step_top, global_step_bottom
 
 
 if __name__ == "__main__":
@@ -239,54 +257,81 @@ if __name__ == "__main__":
 
     opt, unknown = parser.parse_known_args()
 
-    ckpt = None
-    if opt.resume:
-        if not os.path.exists(opt.resume):
-            raise ValueError("Cannot find {}".format(opt.resume))
-        if os.path.isfile(opt.resume):
-            paths = opt.resume.split("/")
+    top_ckpt = None
+    bottom_ckpt = None
+    if opt.top:
+        if not os.path.exists(opt.top):
+            raise ValueError("Cannot find {}".format(opt.top))
+        if os.path.isfile(opt.top):
+            paths = opt.top.split("/")
             try:
                 idx = len(paths)-paths[::-1].index("logs")+1
             except ValueError:
                 idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
             logdir = "/".join(paths[:idx])
-            ckpt = opt.resume
+            top_ckpt = opt.top
         else:
-            assert os.path.isdir(opt.resume), opt.resume
-            logdir = opt.resume.rstrip("/")
-            ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
+            assert os.path.isdir(opt.top), opt.top
+            logdir = opt.top.rstrip("/")
+            top_ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
         print(f"logdir:{logdir}")
-        base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
-        opt.base = base_configs+opt.base
+        top_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
+        opt.top_config = top_configs+opt.base
 
-    if opt.config:
-        if type(opt.config) == str:
-            opt.base = [opt.config]
+    if opt.bottom:
+        if not os.path.exists(opt.bottom):
+            raise ValueError("Cannot find {}".format(opt.bottom))
+        if os.path.isfile(opt.bottom):
+            paths = opt.bottom.split("/")
+            try:
+                idx = len(paths)-paths[::-1].index("logs")+1
+            except ValueError:
+                idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
+            logdir = "/".join(paths[:idx])
+            bottom_ckpt = opt.bottom
         else:
-            opt.base = [opt.base[-1]]
+            assert os.path.isdir(opt.bottom), opt.bottom
+            logdir = opt.bottom.rstrip("/")
+            bottom_ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
+        print(f"logdir:{logdir}")
+        bottom_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
+        opt.bottom_config = bottom_configs+opt.base
 
-    configs = [OmegaConf.load(cfg) for cfg in opt.base]
+    # if opt.config:
+    #     if type(opt.config) == str:
+    #         opt.base = [opt.config]
+    #     else:
+    #         opt.base = [opt.base[-1]]
+
+    top_configs = [OmegaConf.load(cfg) for cfg in opt.top_config]
     cli = OmegaConf.from_dotlist(unknown)
     if opt.ignore_base_data:
-        for config in configs:
+        for config in top_configs:
             if hasattr(config, "data"): del config["data"]
-    config = OmegaConf.merge(*configs, cli)
+    top_config = OmegaConf.merge(*top_configs, cli)
 
-    print(ckpt)
+    bottom_configs = [OmegaConf.load(cfg) for cfg in opt.bottom_config]
+    cli = OmegaConf.from_dotlist(unknown)
+    if opt.ignore_base_data:
+        for config in bottom_configs:
+            if hasattr(config, "data"): del config["data"]
+    bottom_config = OmegaConf.merge(*bottom_configs, cli)
+
     gpu = True
     eval_mode = True
     show_config = False
     if show_config:
-        print(OmegaConf.to_container(config))
+        print(OmegaConf.to_container(top_config))
+        print(OmegaConf.to_container(bottom_config))
 
-    dsets, model, global_step = load_model_and_dset(config, ckpt, gpu, eval_mode)
-    print(f"Global step: {global_step}")
+    dsets, top_model, bottom_model, global_step_top, global_step_bottom = load_model_and_dset(top_config, bottom_config, top_ckpt, bottom_ckpt, gpu, eval_mode)
+    print(f"Global step: {global_step_top}")
 
-    outdir = os.path.join(opt.outdir, "{:06}_{}_{}".format(global_step,
+    outdir = os.path.join(opt.outdir, "{:06}_{}_{}".format(global_step_top,
                                                            opt.top_k,
                                                            opt.temperature))
     os.makedirs(outdir, exist_ok=True)
     print("Writing samples to ", outdir)
     for k in ["originals", "reconstructions", "samples"]:
         os.makedirs(os.path.join(outdir, k), exist_ok=True)
-    run_conditional(model, dsets, outdir, opt.top_k, opt.temperature)
+    run_conditional(top_model, bottom_model, dsets, outdir, opt.top_k, opt.temperature)
