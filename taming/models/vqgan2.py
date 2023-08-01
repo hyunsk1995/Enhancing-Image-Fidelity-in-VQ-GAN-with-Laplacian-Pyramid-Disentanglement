@@ -14,7 +14,7 @@ from kornia.geometry.transform.pyramid import PyrUp
 
 pyrUp = PyrUp()
 
-class HierarchicalVQModel2(pl.LightningModule):
+class HierarchicalVQModel(pl.LightningModule):
     def __init__(self,
                  ddconfig,
                  lossconfig,
@@ -82,9 +82,9 @@ class HierarchicalVQModel2(pl.LightningModule):
 
     def forward(self, input):
         quant, diff, _ = self.encode(input)
-        xhat, dec = self.decode(quant)
+        xrec, dec = self.decode(quant)
 
-        return xhat, dec, diff
+        return xrec, dec, diff
 
     def encode(self, input):
         prev = input
@@ -111,11 +111,11 @@ class HierarchicalVQModel2(pl.LightningModule):
     def decode(self, quant):
         dec = []
         dec.append(self.decoder[0](quant[0]))
-        xhat = dec[0]
+        xrec = dec[0]
         for i in range(self.num_stages[1:]):
             dec.append(self.decoder[i](quant[i]))
-            xhat = pyrUp(xhat) + dec[i]
-        return dec, xhat
+            xrec = pyrUp(xrec) + dec[i]
+        return dec, xrec
     
     def decode_code(self, code):
         quant = []
@@ -124,8 +124,8 @@ class HierarchicalVQModel2(pl.LightningModule):
             _quant = _quant.permute(0, 3, 1, 2)
             quant.append(_quant)
 
-        dec, xhat = self.decode(quant)
-        return xhat
+        dec, xrec = self.decode(quant)
+        return xrec
 
     def get_input(self, batch, k):
         x = batch[k]
@@ -136,19 +136,20 @@ class HierarchicalVQModel2(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        lf_rec, hf_rec, xrec, qloss_t, qloss_b = self(x)
-
+        xrec, dec, diff = self(x)
+        
         # autoencode
-        aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="train")
-
+        aeloss, log_dict_ae = self.loss(diff, x, dec, xrec, split="train")
         self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
         return aeloss
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        lf_rec, hf_rec, xrec, qloss_t, qloss_b = self(x)
-        aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="val")
+        xrec, dec, diff = self(x)
+        
+        # autoencode
+        aeloss, log_dict_ae = self.loss(diff, x, dec, xrec, split="val")
         rec_loss = log_dict_ae["val/rec_loss"]
         self.log("val/rec_loss", rec_loss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
@@ -159,16 +160,26 @@ class HierarchicalVQModel2(pl.LightningModule):
 
     def configure_optimizers(self):
         lr = self.learning_rate
-        opt_ae = torch.optim.Adam(list(self.encoder_t.parameters())+
-                                  list(self.encoder_b.parameters())+
-                                  list(self.decoder_t.parameters())+
-                                  list(self.decoder_b.parameters())+
-                                  list(self.quantize_t.parameters())+
-                                  list(self.quantize_b.parameters())+
-                                  list(self.quant_conv_t.parameters())+
-                                  list(self.quant_conv_b.parameters()),
-                                #   list(self.post_quant_conv.parameters()),
+        opt_list = list()
+        for i in range(self.num_stages):
+            opt_list += list(self.encoder[i].parameters())
+            opt_list += list(self.decoder[i].parameters())
+            opt_list += list(self.quantize[i].parameters())
+            opt_list += list(self.quant_conv[i].parameters())
+
+        opt_ae = torch.optim.Adam(list(self.encoder[0].parameters())+
+                                  list(self.encoder[1].parameters())+
+                                  list(self.decoder[0].parameters())+
+                                  list(self.decoder[1].parameters())+
+                                  list(self.quantize[0].parameters())+
+                                  list(self.quantize[1].parameters())+
+                                  list(self.quant_conv[0].parameters())+
+                                  list(self.quant_conv[1].parameters()),
                                   lr=lr, betas=(0.5, 0.9))
+
+        # opt_ae = torch.optim.Adam(opt_list,
+        #                         #   list(self.post_quant_conv.parameters()),
+        #                           lr=lr, betas=(0.5, 0.9))
         return [opt_ae], []
 
     def log_images(self, batch, **kwargs):

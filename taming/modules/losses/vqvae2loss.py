@@ -21,68 +21,45 @@ class DummyLoss(nn.Module):
 
 
 class VQVAE2Loss(nn.Module):
-    def __init__(self, codebook_weight_t=1.0, codebook_weight_b=1.0):
+    def __init__(self, codebook_weight=[1.0, 1.0]):
         super().__init__()
-        self.codebook_weight_t = codebook_weight_t
-        self.codebook_weight_b = codebook_weight_b
+        self.codebook_weight = codebook_weight
 
-    def forward(self, codebook_loss_t, codebook_loss_b, inputs, lf_recon, hf_recon, reconstructions, split="train"):
-        lf, hf = disentangle(inputs)
-        rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        lf_loss = torch.abs(torch.tensor(lf) - lf_recon)
-        hf_loss = torch.abs(torch.tensor(hf) - hf_recon)
-
-        loss = rec_loss.mean() + lf_loss.mean() + hf_loss.mean() + self.codebook_weight_t * codebook_loss_t.mean() + self.codebook_weight_b * codebook_loss_b.mean()
+    def forward(self, codebook_loss, inputs, dec, xrec, split="train"):
+        num_stage = len(dec)
+        dec_ = disentangle(inputs, num_stage)
+        disentangle_loss = []
+        rec_loss = torch.abs(inputs.contiguous() - xrec.contiguous())
+        loss = rec_loss.mean()
+        
+        for i in range(num_stage):
+            disentangle_loss.append(torch.abs(torch.tensor(dec_[i] - dec[i])))
+            loss += torch.abs(torch.tensor(dec_[i] - dec[i]))
+            loss += codebook_loss[i].mean() * self.codebook_weight[i]
 
         log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
-                "{}/quant_loss_top".format(split): codebook_loss_t.detach().mean(),
-                "{}/quant_loss_bottom".format(split): codebook_loss_b.detach().mean(),
+                "{}/quant_loss_top".format(split): codebook_loss[0].detach().mean(),
+                "{}/quant_loss_bottom".format(split): codebook_loss[1].detach().mean(),
                 "{}/rec_loss".format(split): rec_loss.detach().mean(),
-                "{}/lf_loss".format(split): lf_loss.detach().mean(),
-                "{}/hf_loss".format(split): hf_loss.detach().mean(),
+                "{}/lf_loss".format(split): disentangle_loss[0].detach().mean(),
+                "{}/hf_loss".format(split): disentangle_loss[1].detach().mean(),
                 }
         return loss, log
-    
-class VQVAE2Loss2(nn.Module):
-    def __init__(self, codebook_weight_t=1.0, codebook_weight_b=1.0):
-        super().__init__()
-        self.codebook_weight_t = codebook_weight_t
-        self.codebook_weight_b = codebook_weight_b
 
-    def forward(self, codebook_loss_t, codebook_loss_b, inputs, lf_recon, hf_recon, reconstructions, split="train"):
-        lf, hf = disentangle(inputs)
-        rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        lf_loss = torch.abs(torch.tensor(lf) - lf_recon)
-        hf_loss = torch.abs(torch.tensor(hf) - hf_recon)
 
-        loss = rec_loss.mean() + lf_loss.mean() + hf_loss.mean() + self.codebook_weight_t * codebook_loss_t.mean() + self.codebook_weight_b * codebook_loss_b.mean()
-
-        log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
-                "{}/quant_loss_top".format(split): codebook_loss_t.detach().mean(),
-                "{}/quant_loss_bottom".format(split): codebook_loss_b.detach().mean(),
-                "{}/rec_loss".format(split): rec_loss.detach().mean(),
-                "{}/lf_loss".format(split): lf_loss.detach().mean(),
-                "{}/hf_loss".format(split): hf_loss.detach().mean(),
-                }
-        return loss, log
-    
-class MultiStageTransformerLoss(nn.Module):
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, codebook_loss, inputs, reconstructions, split="train"):
-        return
-    
-def disentangle(img):
+def disentangle(img, num_stage):
     assert img[0].shape == (3, 256, 256)    
     img = gaussianBlur(img)
     
-    Downimg = pyrDown(img)
-    DownUp = pyrUp(Downimg)
+    Downimg = []
+    DownUp = []
+    Laplacian = []
 
-    # imgarray = np.array(img.detach().cpu(), dtype=float)
-    # DownUparray = np.array(DownUp.detach().cpu(), dtype=float)
-    # Laplacian = imgarray - DownUparray
-    Laplacian = img - DownUp
+    prev = img
+    for i in range(num_stage):
+        Downimg.append(pyrDown(prev))
+        DownUp.append(pyrUp(Downimg[i]))
+        Laplacian.append(prev - DownUp[i])
+        prev = Downimg[i]
 
     return Downimg, Laplacian
