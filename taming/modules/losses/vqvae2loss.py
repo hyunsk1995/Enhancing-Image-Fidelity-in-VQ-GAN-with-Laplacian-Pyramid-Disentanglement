@@ -43,6 +43,29 @@ class VQVAE2Loss(nn.Module):
                 }
         return loss, log
     
+class VQVAE2Loss2(nn.Module):
+    def __init__(self, codebook_weight_t=1.0, codebook_weight_b=1.0):
+        super().__init__()
+        self.codebook_weight_t = codebook_weight_t
+        self.codebook_weight_b = codebook_weight_b
+
+    def forward(self, codebook_loss_t, codebook_loss_b, inputs, lf_recon, hf_recon, reconstructions, split="train"):
+        lf, hf = disentangle(inputs)
+        rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
+        lf_loss = torch.abs(torch.tensor(lf) - lf_recon)
+        hf_loss = torch.abs(torch.tensor(hf) - hf_recon)
+
+        loss = rec_loss.mean() + lf_loss.mean() + hf_loss.mean() + self.codebook_weight_t * codebook_loss_t.mean() + self.codebook_weight_b * codebook_loss_b.mean()
+
+        log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
+                "{}/quant_loss_top".format(split): codebook_loss_t.detach().mean(),
+                "{}/quant_loss_bottom".format(split): codebook_loss_b.detach().mean(),
+                "{}/rec_loss".format(split): rec_loss.detach().mean(),
+                "{}/lf_loss".format(split): lf_loss.detach().mean(),
+                "{}/hf_loss".format(split): hf_loss.detach().mean(),
+                }
+        return loss, log
+    
 class MultiStageTransformerLoss(nn.Module):
     def __init__(self):
         super().__init__()

@@ -14,7 +14,7 @@ from kornia.geometry.transform.pyramid import PyrUp
 
 pyrUp = PyrUp()
 
-class HierarchicalVQModel(pl.LightningModule):
+class HierarchicalVQModel2(pl.LightningModule):
     def __init__(self,
                  ddconfig,
                  lossconfig,
@@ -27,6 +27,7 @@ class HierarchicalVQModel(pl.LightningModule):
                  monitor=None,
                  remap=None,
                  sane_index_shape=False,  # tell vector quantizer to return indices as bhw
+                 num_stages=2,
                  ):
         super().__init__()
 
@@ -36,30 +37,23 @@ class HierarchicalVQModel(pl.LightningModule):
         in_channel = ddconfig["in_channels"]
         channel = ddconfig["ch"]
         
-        self.encoder_b = Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4)
-        self.encoder_t = Encoder(channel, channel, n_res_block, n_res_channel, stride=2)
+        # Encoder
+        self.encoder = []
+        self.quant_conv = []
+        self.quantize = []
+        self.decoder = []
+        self.upsample = []
+        self.num_stages = num_stages
 
-        self.quant_conv_t = torch.nn.Conv2d(channel, embed_dim, 1)
-        self.quantize_t = VectorQuantizer(embed_dim, n_embed)
+        self.encoder.append(Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4))
 
-        self.decoder_t = Decoder(
-            embed_dim, in_channel, channel, n_res_block, n_res_channel, stride=4
-        )
-
-        self.quant_conv_b = torch.nn.Conv2d(channel, embed_dim, 1)
-        self.quantize_b = VectorQuantizer(embed_dim, n_embed)
-        self.upsample_t = torch.nn.ConvTranspose2d(
-            embed_dim, embed_dim, 4, stride=2, padding=1
-        )
-
-        self.decoder_b = Decoder(
-            embed_dim,
-            in_channel,
-            channel,
-            n_res_block,
-            n_res_channel,
-            stride=4,
-        )
+        for i in range(self.num_stages):
+            if i > 0:
+                self.encoder.append(Encoder(channel, channel, n_res_block, n_res_channel, stride=2))
+            self.quant_conv.append(torch.nn.Conv2d(channel, embed_dim, 1))
+            self.quantize.append(VectorQuantizer(embed_dim, n_embed))
+            self.decoder.append(Decoder(embed_dim, in_channel, channel, n_res_block, n_res_channel, stride=4))
+            self.upsample.append(torch.nn.ConvTranspose2d(embed_dim, embed_dim, 4, stride=2, padding=1))
 
         self.loss = instantiate_from_config(lossconfig)        
         # self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
@@ -87,64 +81,51 @@ class HierarchicalVQModel(pl.LightningModule):
         print(f"Restored from {path}")
 
     def forward(self, input):
-        quant_t, quant_b, diff_t, diff_b, _, _ = self.encode(input)
-        dec, dec_t, dec_b = self.decode(quant_t, quant_b)
+        quant, diff, _ = self.encode(input)
+        xhat, dec = self.decode(quant)
 
-        return dec, dec_t, dec_b, diff_t, diff_b
+        return xhat, dec, diff
 
     def encode(self, input):
-        enc_b = self.encoder_b(input)
-        enc_t = self.encoder_t(enc_b)
+        prev = input
+        enc = []
+        quant = []
+        diff = []
+        id = []
 
-        quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
-        quant_t, diff_t, id_t = self.quantize_t(quant_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        diff_t = diff_t.unsqueeze(0)
+        for i in range(self.num_stages):
+            _enc = self.encoder[i](prev)
+            _quant = self.quant_conv[i](_enc).permute(0, 2, 3, 1)
+            _quant, _diff, _id = self.quantize[i](_quant)
+            _quant = _quant.permute(0, 3, 1, 2)
+            _diff = _diff.unsqueeze(0)
 
-        quant_b = self.quant_conv_b(enc_b).permute(0, 2, 3, 1)
-        quant_b, diff_b, id_b = self.quantize_b(quant_b)
-        quant_b = quant_b.permute(0, 3, 1, 2)
-        diff_b = diff_b.unsqueeze(0)
+            quant.append(_quant)
+            diff.append(_diff)
+            id.append(_id)
+           
+            prev = enc[i]
 
-        return quant_t, quant_b, diff_t, diff_b, id_t, id_b
-    
-    # Seperation of encoding used in transformer
-    def encode_top(self, input):
-        enc_b = self.encoder_b(input)
-        enc_t = self.encoder_t(enc_b)
+        return quant, diff, id
         
-        quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
-        quant_t, diff_t, id_t = self.quantize_t(quant_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        diff_t = diff_t.unsqueeze(0)
-
-        return quant_t, id_t
-
-    def encode_bottom(self, input):
-        enc_b = self.encoder_b(input)
-
-        quant_b = self.quant_conv_b(enc_b).permute(0, 2, 3, 1)
-        quant_b, diff_b, id_b = self.quantize_b(quant_b)
-        quant_b = quant_b.permute(0, 3, 1, 2)
-        diff_b = diff_b.unsqueeze(0)
-
-        return quant_b, id_b
-
-    def decode(self, quant_t, quant_b):
-        dec_t = self.decoder_t(quant_t)
-        dec_b = self.decoder_b(quant_b)
-        dec = pyrUp(dec_t) + dec_b
-        return dec_t, dec_b, dec
+    def decode(self, quant):
+        dec = []
+        dec.append(self.decoder[0](quant[0]))
+        xhat = dec[0]
+        for i in range(self.num_stages[1:]):
+            dec.append(self.decoder[i](quant[i]))
+            xhat = pyrUp(xhat) + dec[i]
+        return dec, xhat
     
-    def decode_code(self, code_t, code_b):
-        quant_t = self.quantize_t.embed_code(code_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        quant_b = self.quantize_b.embed_code(code_b)
-        quant_b = quant_b.permute(0, 3, 1, 2)
+    def decode_code(self, code):
+        quant = []
+        for i in range(self.num_stages):
+            _quant = self.quantize[i].embed_code(code[i])
+            _quant = _quant.permute(0, 3, 1, 2)
+            quant.append(_quant)
 
-        dec = self.decode(quant_t, quant_b)
-
-        return dec
+        dec, xhat = self.decode(quant)
+        return xhat
 
     def get_input(self, batch, k):
         x = batch[k]
