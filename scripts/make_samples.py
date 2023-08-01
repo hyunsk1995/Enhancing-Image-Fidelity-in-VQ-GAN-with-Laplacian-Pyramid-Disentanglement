@@ -7,7 +7,9 @@ from main import instantiate_from_config, DataModuleFromConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.dataloader import default_collate
 from tqdm import trange
+from kornia.geometry.transform.pyramid import PyrUp
 
+pyrUp = PyrUp()
 
 def save_image(x, path):
     c,h,w = x.shape
@@ -16,7 +18,7 @@ def save_image(x, path):
     Image.fromarray(x).save(path)
 
 # logits : (B, hw, vocab_size)
-def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
+def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k, hier="top"):
     sample = True
 
     for i in range(start_i, qshape[2]):
@@ -67,13 +69,13 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         scale_factor = 1.0
         quant_zt, zt_indices = top_model.encode_to_z(x)
         quant_zb, zb_indices = bottom_model.encode_to_z(x)
-        quant_ct, ct_indices = top_model.encode_to_c(c)
-        quant_cb, cb_indices = bottom_model.encode_to_c(c)
+        _, ct_indices = top_model.encode_to_c(c)
+        _, cb_indices = bottom_model.encode_to_c(c)
 
         qshape_t = quant_zt.shape
         qshape_b = quant_zb.shape
 
-        xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
+        _, _, xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
         for i in range(xrec.shape[0]):
             save_image(xrec[i], os.path.join(outdir, "reconstructions",
                                              "{:06}.png".format(indices[i])))
@@ -88,8 +90,9 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
 
         t_idx = zt_indices
         b_idx = zb_indices
-        half_sample = True
+        half_sample = False
         if half_sample:
+            outdir += "-half"
             start_t = t_idx.shape[1]//2
             start_b = b_idx.shape[1]//2
         else:
@@ -107,10 +110,22 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         start_jb = start_b %qshape_b[3]
 
         t_idx = AR_modeling(top_model, t_idx, ct_indices, start_it, start_jt, qshape_t, temperature, top_k)
-        b_idx = AR_modeling(bottom_model, b_idx, cb_indices, start_ib, start_jb, qshape_b, temperature, top_k)
 
-        xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
+        # Condition from the lower level
+        cb_indices = torch.cat((cb_indices, t_idx.reshape(qshape_t[0], -1)), dim=1)
+
+        b_idx = AR_modeling(bottom_model, b_idx, cb_indices, start_ib, start_jb, qshape_b, temperature, top_k, hier="bottom")
+
+        x_lf = top_model.decode_to_img(t_idx, qshape_t)
+        x_hf = bottom_model.decode_to_img(b_idx, qshape_b)
+
+        xsample = pyrUp(x_lf) + x_hf
+        # xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
         for i in range(xsample.shape[0]):
+            save_image(x_lf[i], os.path.join(outdir, "samples_lf",
+                                                "{:06}.png".format(indices[i])))
+            save_image(x_hf[i], os.path.join(outdir, "samples_hf",
+                                                "{:06}.png".format(indices[i])))
             save_image(xsample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))
 
@@ -332,6 +347,6 @@ if __name__ == "__main__":
                                                            opt.temperature))
     os.makedirs(outdir, exist_ok=True)
     print("Writing samples to ", outdir)
-    for k in ["originals", "reconstructions", "samples"]:
+    for k in ["originals", "reconstructions", "samples", "samples_lf", "samples_hf"]:
         os.makedirs(os.path.join(outdir, k), exist_ok=True)
     run_conditional(top_model, bottom_model, dsets, outdir, opt.top_k, opt.temperature)

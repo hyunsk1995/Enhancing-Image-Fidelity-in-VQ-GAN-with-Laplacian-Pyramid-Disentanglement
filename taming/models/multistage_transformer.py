@@ -93,6 +93,11 @@ class MultiStageTransformer(pl.LightningModule):
         else:
             a_indices = z_indices
 
+        if self.hier == "bottom":
+            _, p_indices = self.encode_to_p(x)
+
+            a_indices = torch.cat((p_indices, a_indices), dim=1)
+
         cz_indices = torch.cat((c_indices, a_indices), dim=1)
 
         # target includes all sequence elements (no need to handle first one
@@ -103,6 +108,8 @@ class MultiStageTransformer(pl.LightningModule):
         # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
         logits = logits[:, c_indices.shape[1]-1:]
 
+        if self.hier == "bottom":
+            logits = logits[:, p_indices.shape[1]:]
         return logits, target
 
     def top_k_logits(self, logits, k):
@@ -185,6 +192,19 @@ class MultiStageTransformer(pl.LightningModule):
         if len(indices.shape) > 2:
             indices = indices.view(c.shape[0], -1)
         return quant_c, indices
+    
+    @torch.no_grad()
+    def encode_to_p(self, x):
+        """
+        Get codes from previous level.
+        """
+        assert self.hier != "top"
+        if self.hier == "bottom":
+            quant_p, info = self.first_stage_model.encode_top(x)
+        indices = info.view(quant_p.shape[0], -1)
+        indices = self.permuter(indices)
+
+        return quant_p, indices
 
     @torch.no_grad()
     def decode_to_img(self, index, zshape):

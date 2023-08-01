@@ -8,8 +8,8 @@ model:
       target: taming.modules.transformer.mingpt.GPT
       params:
         vocab_size: 512
-        block_size: 4351
-        n_layer: 24
+        block_size: 5375 # 4096 + 256 + 1024
+        n_layer: 12
         n_head: 4
         n_embd: 256
     first_stage_config:
