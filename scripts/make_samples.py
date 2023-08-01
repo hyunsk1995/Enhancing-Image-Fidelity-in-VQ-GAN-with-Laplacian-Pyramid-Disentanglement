@@ -107,6 +107,8 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         start_jb = start_b %qshape_b[3]
 
         t_idx = AR_modeling(top_model, t_idx, ct_indices, start_it, start_jt, qshape_t, temperature, top_k)
+        cb_indices = torch.cat((cb_indices, t_idx.reshape(qshape_t[0], -1)), dim=1)
+
         b_idx = AR_modeling(bottom_model, b_idx, cb_indices, start_ib, start_jb, qshape_b, temperature, top_k)
 
         xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
