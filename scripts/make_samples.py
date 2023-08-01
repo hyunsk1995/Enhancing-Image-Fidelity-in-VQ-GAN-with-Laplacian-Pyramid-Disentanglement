@@ -90,9 +90,8 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
 
         t_idx = zt_indices
         b_idx = zb_indices
-        half_sample = False
+        half_sample = True
         if half_sample:
-            outdir += "-half"
             start_t = t_idx.shape[1]//2
             start_b = b_idx.shape[1]//2
         else:
