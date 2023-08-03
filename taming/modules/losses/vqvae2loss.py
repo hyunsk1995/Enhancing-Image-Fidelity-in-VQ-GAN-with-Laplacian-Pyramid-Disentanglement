@@ -29,10 +29,14 @@ class VQVAE2Loss(nn.Module):
     def forward(self, codebook_loss_t, codebook_loss_b, inputs, lf_recon, hf_recon, reconstructions, split="train"):
         lf, hf = disentangle(inputs)
         rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
-        lf_loss = torch.abs(torch.tensor(lf) - lf_recon)
-        hf_loss = torch.abs(torch.tensor(hf) - hf_recon)
+        lf_loss = torch.abs(lf.clone().detach() - lf_recon)
+        hf_loss = torch.abs(hf.clone().detach() - hf_recon)
+
+        if torch.cuda.current_device() == 0:
+            print("codeb_loss:", codebook_loss_b.mean())
 
         loss = rec_loss.mean() + lf_loss.mean() + hf_loss.mean() + self.codebook_weight_t * codebook_loss_t.mean() + self.codebook_weight_b * codebook_loss_b.mean()
+        # loss = hf_loss.mean()
 
         log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
                 "{}/quant_loss_top".format(split): codebook_loss_t.detach().mean(),
