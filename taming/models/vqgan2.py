@@ -6,13 +6,16 @@ from main import instantiate_from_config
 
 from taming.modules.diffusionmodules.model import Encoder, Decoder
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
-from taming.modules.vqvae.quantize import GumbelQuantize
-from taming.modules.vqvae.quantize import EMAVectorQuantizer
 
 import cv2
-from kornia.geometry.transform.pyramid import PyrUp
+import torch.nn as nn
+
+from kornia.geometry.transform.pyramid import PyrUp, PyrDown
+from torchvision.transforms import GaussianBlur
 
 pyrUp = PyrUp()
+pyrDown = PyrDown()
+gaussianBlur = GaussianBlur((3,3), 1.5)
 
 class HierarchicalVQModel(pl.LightningModule):
     def __init__(self,
@@ -38,11 +41,10 @@ class HierarchicalVQModel(pl.LightningModule):
         channel = ddconfig["ch"]
         
         # Encoder
-        self.encoder = []
-        self.quant_conv = []
-        self.quantize = []
-        self.decoder = []
-        self.upsample = []
+        self.encoder = nn.ModuleList()
+        self.quant_conv = nn.ModuleList()
+        self.quantize = nn.ModuleList()
+        self.decoder = nn.ModuleList()
         self.num_stages = num_stages
 
         self.encoder.append(Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4))
@@ -53,7 +55,6 @@ class HierarchicalVQModel(pl.LightningModule):
             self.quant_conv.append(torch.nn.Conv2d(channel, embed_dim, 1))
             self.quantize.append(VectorQuantizer(embed_dim, n_embed))
             self.decoder.append(Decoder(embed_dim, in_channel, channel, n_res_block, n_res_channel, stride=4))
-            self.upsample.append(torch.nn.ConvTranspose2d(embed_dim, embed_dim, 4, stride=2, padding=1))
 
         self.loss = instantiate_from_config(lossconfig)        
         # self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
@@ -100,6 +101,7 @@ class HierarchicalVQModel(pl.LightningModule):
             _quant = _quant.permute(0, 3, 1, 2)
             _diff = _diff.unsqueeze(0)
 
+            enc.append(_enc)
             quant.append(_quant)
             diff.append(_diff)
             id.append(_id)
@@ -110,22 +112,15 @@ class HierarchicalVQModel(pl.LightningModule):
         
     def decode(self, quant):
         dec = []
-        dec.append(self.decoder[0](quant[0]))
-        xrec = dec[0]
-        for i in range(self.num_stages[1:]):
-            dec.append(self.decoder[i](quant[i]))
-            xrec = pyrUp(xrec) + dec[i]
-        return dec, xrec
-    
-    def decode_code(self, code):
-        quant = []
         for i in range(self.num_stages):
-            _quant = self.quantize[i].embed_code(code[i])
-            _quant = _quant.permute(0, 3, 1, 2)
-            quant.append(_quant)
+            j = (self.num_stages-1) - i
+            dec.append(self.decoder[j](quant[j]))
 
-        dec, xrec = self.decode(quant)
-        return xrec
+            if i > 0:
+                xrec = pyrUp(xrec) + dec[i]
+            else:
+                xrec = dec[i]
+        return xrec, dec
 
     def get_input(self, batch, k):
         x = batch[k]
@@ -167,26 +162,19 @@ class HierarchicalVQModel(pl.LightningModule):
             opt_list += list(self.quantize[i].parameters())
             opt_list += list(self.quant_conv[i].parameters())
 
-        opt_ae = torch.optim.Adam(list(self.encoder[0].parameters())+
-                                  list(self.encoder[1].parameters())+
-                                  list(self.decoder[0].parameters())+
-                                  list(self.decoder[1].parameters())+
-                                  list(self.quantize[0].parameters())+
-                                  list(self.quantize[1].parameters())+
-                                  list(self.quant_conv[0].parameters())+
-                                  list(self.quant_conv[1].parameters()),
+        opt_ae = torch.optim.Adam(opt_list,
                                   lr=lr, betas=(0.5, 0.9))
-
-        # opt_ae = torch.optim.Adam(opt_list,
-        #                         #   list(self.post_quant_conv.parameters()),
-        #                           lr=lr, betas=(0.5, 0.9))
         return [opt_ae], []
 
     def log_images(self, batch, **kwargs):
         log = dict()
         x = self.get_input(batch, self.image_key)
         x = x.to(self.device)
-        xrec, _ = self(x)
+        xrec, dec, _ = self(x)
+
+        dis = self.disentangle(x, self.num_stages)
+        log["input_lf"] = dis[0]
+        log["input_hf"] = dis[1]
         if x.shape[1] > 3:
             # colorize with random projection
             assert xrec.shape[1] > 3
@@ -194,6 +182,8 @@ class HierarchicalVQModel(pl.LightningModule):
             xrec = self.to_rgb(xrec)
         log["inputs"] = x
         log["reconstructions"] = xrec
+        log["recon_lf"] = dec[0]
+        log["recon_hf"] = dec[1]
         return log
 
     def to_rgb(self, x):
@@ -203,3 +193,21 @@ class HierarchicalVQModel(pl.LightningModule):
         x = F.conv2d(x, weight=self.colorize)
         x = 2.*(x-x.min())/(x.max()-x.min()) - 1.
         return x
+    
+    def disentangle(self, img, num_stage):
+        assert img[0].shape == (3, 256, 256)    
+        img = gaussianBlur(img)
+        disentangled = []
+        prev = img
+
+        for _ in range(num_stage-1):
+            Downimg = pyrDown(prev)
+            DownUp = pyrUp(Downimg)
+            Laplacian = prev - DownUp
+            prev = Downimg
+            disentangled.append(Laplacian)
+        
+        disentangled.append(Downimg)
+        disentangled.reverse()
+
+        return disentangled

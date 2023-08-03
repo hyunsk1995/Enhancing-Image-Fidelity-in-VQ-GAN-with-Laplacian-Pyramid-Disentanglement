@@ -27,14 +27,14 @@ class VQVAE2Loss(nn.Module):
 
     def forward(self, codebook_loss, inputs, dec, xrec, split="train"):
         num_stage = len(dec)
-        dec_ = disentangle(inputs, num_stage)
+        disentangled = disentangle(inputs, num_stage)
         disentangle_loss = []
         rec_loss = torch.abs(inputs.contiguous() - xrec.contiguous())
         loss = rec_loss.mean()
         
         for i in range(num_stage):
-            disentangle_loss.append(torch.abs(torch.tensor(dec_[i] - dec[i])))
-            loss += torch.abs(torch.tensor(dec_[i] - dec[i]))
+            disentangle_loss.append(torch.abs(disentangled[i] - dec[i]))
+            loss += disentangle_loss[i].mean()
             loss += codebook_loss[i].mean() * self.codebook_weight[i]
 
         log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
@@ -50,16 +50,17 @@ class VQVAE2Loss(nn.Module):
 def disentangle(img, num_stage):
     assert img[0].shape == (3, 256, 256)    
     img = gaussianBlur(img)
-    
-    Downimg = []
-    DownUp = []
-    Laplacian = []
-
+    disentangled = []
     prev = img
-    for i in range(num_stage):
-        Downimg.append(pyrDown(prev))
-        DownUp.append(pyrUp(Downimg[i]))
-        Laplacian.append(prev - DownUp[i])
-        prev = Downimg[i]
 
-    return Downimg, Laplacian
+    for _ in range(num_stage-1):
+        Downimg = pyrDown(prev)
+        DownUp = pyrUp(Downimg)
+        Laplacian = prev - DownUp
+        prev = Downimg
+        disentangled.append(Laplacian)
+    
+    disentangled.append(Downimg)
+    disentangled.reverse()
+
+    return disentangled

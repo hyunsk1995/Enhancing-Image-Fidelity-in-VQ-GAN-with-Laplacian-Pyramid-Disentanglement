@@ -20,7 +20,7 @@ model:
     lossconfig:
       target: taming.modules.losses.vqvae2loss.VQVAE2Loss
       params:
-        codebook_weight: [0.25, 0.25]
+        codebook_weight: [0.5, 0.5]
 
 data:
   target: main.DataModuleFromConfig

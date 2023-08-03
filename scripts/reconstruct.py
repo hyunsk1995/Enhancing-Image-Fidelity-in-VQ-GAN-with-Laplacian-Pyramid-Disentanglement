@@ -50,12 +50,12 @@ def custom_to_pil(x):
 
 def reconstruct_with_vqgan(x, model):
   # could also use model(x) for reconstruction but use explicit encoding and decoding here
-  quant_t, quant_b, diff_t, diff_b, id_t, id_b = model.encode(x)
-  print(f"VQGAN --- {model.__class__.__name__}: latent shape: {quant_t.shape[2:]}")
-  rec_t, rec_b, xrec = model.decode(quant_t, quant_b)
-  return rec_t, rec_b, xrec
+  quant, _, _ = model.encode(x)
+  print(f"VQGAN --- {model.__class__.__name__}: latent shape: {quant[0].shape[2:]}")
+  xrec, dec = model.decode(quant)
+  return xrec, dec
 
-log = "2023-07-21T09-39-10"
+log = "2023-08-02T00-43-28"
 config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
 model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=199.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)
@@ -79,13 +79,15 @@ def preprocess(img, target_image_size=256, map_dalle=True):
     img = torch.unsqueeze(T.ToTensor()(img), 0)
     return img
 
-def stack_reconstructions(input, x0, xt, xb, titles=[]):
+def stack_reconstructions(input, x0, dec, titles=[]):
   w, h = input.size[0], input.size[1]
-  img = Image.new("RGB", (4*w, h))
+  palette_size = 2+len(dec)
+  img = Image.new("RGB", (palette_size*w, h))
   img.paste(input, (0,0))
   img.paste(x0, (1*w,0))
-  img.paste(xt, (2*w,0))
-  img.paste(xb, (3*w,0))
+  for i, d in enumerate(dec):
+    img.paste(custom_to_pil(d[0]), ((i+2)*w,0))
+
   for i, title in enumerate(titles):
     ImageDraw.Draw(img).text((i*w, 0), f'{title}', (255, 255, 255), font=font) # coordinates, text, color, font
   img.save("test.jpg")
@@ -98,12 +100,10 @@ def reconstruction_pipeline(url, size=256):
   x_vqgan = x_vqgan.to(DEVICE)
   
   print(f"input is of size: {x_vqgan.shape}")
-  xt, xb, x0 = reconstruct_with_vqgan(preprocess_vqgan(x_vqgan), model256)
-  xt = pyrUp(xt)
+  x0, dec = reconstruct_with_vqgan(preprocess_vqgan(x_vqgan), model256)
   img = stack_reconstructions(custom_to_pil(preprocess_vqgan(x_vqgan[0])),
-                              custom_to_pil(x0[0]), 
-                              custom_to_pil(xt[0]), 
-                              custom_to_pil(xb[0]), 
+                              custom_to_pil(x0[0]),
+                              dec,
                               titles=titles)
   return img
 
