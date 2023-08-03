@@ -52,10 +52,10 @@ def reconstruct_with_vqgan(x, model):
   # could also use model(x) for reconstruction but use explicit encoding and decoding here
   quant_t, quant_b, diff_t, diff_b, id_t, id_b = model.encode(x)
   print(f"VQGAN --- {model.__class__.__name__}: latent shape: {quant_t.shape[2:]}")
-  rec_t, rec_b, xrec = model.decode(quant_t, quant_b)
+  xrec, rec_t, rec_b = model.decode(quant_t, quant_b)
   return rec_t, rec_b, xrec
 
-log = "2023-07-21T09-39-10"
+log = "2023-08-02T13-07-38"
 config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
 model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=199.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)

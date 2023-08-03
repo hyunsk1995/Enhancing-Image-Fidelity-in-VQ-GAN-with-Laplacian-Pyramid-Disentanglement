@@ -134,7 +134,7 @@ class HierarchicalVQModel(pl.LightningModule):
         dec_t = self.decoder_t(quant_t)
         dec_b = self.decoder_b(quant_b)
         dec = pyrUp(dec_t) + dec_b
-        return dec_t, dec_b, dec
+        return dec, dec_t, dec_b
     
     def decode_code(self, code_t, code_b):
         quant_t = self.quantize_t.embed_code(code_t)
@@ -155,7 +155,7 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def training_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        lf_rec, hf_rec, xrec, qloss_t, qloss_b = self(x)
+        xrec, lf_rec, hf_rec, qloss_t, qloss_b = self(x)
 
         # autoencode
         aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="train")
@@ -166,7 +166,7 @@ class HierarchicalVQModel(pl.LightningModule):
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
-        lf_rec, hf_rec, xrec, qloss_t, qloss_b = self(x)
+        xrec, lf_rec, hf_rec, qloss_t, qloss_b = self(x)
         aeloss, log_dict_ae = self.loss(qloss_t, qloss_b, x, lf_rec, hf_rec, xrec, split="val")
         rec_loss = log_dict_ae["val/rec_loss"]
         self.log("val/rec_loss", rec_loss,
@@ -194,7 +194,7 @@ class HierarchicalVQModel(pl.LightningModule):
         log = dict()
         x = self.get_input(batch, self.image_key)
         x = x.to(self.device)
-        xrec, _ = self(x)
+        xrec, dec_t, dec_b, _, _ = self(x)
         if x.shape[1] > 3:
             # colorize with random projection
             assert xrec.shape[1] > 3
@@ -202,6 +202,8 @@ class HierarchicalVQModel(pl.LightningModule):
             xrec = self.to_rgb(xrec)
         log["inputs"] = x
         log["reconstructions"] = xrec
+        log["recon_lf"] = dec_t
+        log["recon_hf"] = dec_b
         return log
 
     def to_rgb(self, x):
