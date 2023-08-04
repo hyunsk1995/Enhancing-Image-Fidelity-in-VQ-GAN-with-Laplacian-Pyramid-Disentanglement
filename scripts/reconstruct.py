@@ -55,11 +55,7 @@ def reconstruct_with_vqgan(x, model):
   xrec, rec_t, rec_b = model.decode(quant_t, quant_b)
   return rec_t, rec_b, xrec
 
-<<<<<<< HEAD
 log = "2023-08-03T13-07-38"
-=======
-log = "2023-08-03T18-58-22"
->>>>>>> d4126c68ed2da21043c4a7c60ff0e1fa1315af32
 config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
 model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=29.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)
