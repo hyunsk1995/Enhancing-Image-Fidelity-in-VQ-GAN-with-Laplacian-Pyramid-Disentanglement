@@ -30,11 +30,8 @@ class VQVAE2Loss(nn.Module):
         lf, hf = disentangle(inputs)
         rec_loss = torch.abs(inputs.contiguous() - reconstructions.contiguous())
         lf_loss = torch.abs(lf.clone().detach() - lf_recon)
-        hf_loss = torch.abs(hf.clone().detach() - hf_recon)
-
-        if torch.cuda.current_device() == 0:
-            print("codeb_loss:", codebook_loss_b.mean())
-
+        hf_loss = torch.abs(hf.clone().detach() - hf_recon
+                            
         loss = rec_loss.mean() + lf_loss.mean() + hf_loss.mean() + self.codebook_weight_t * codebook_loss_t.mean() + self.codebook_weight_b * codebook_loss_b.mean()
         # loss = hf_loss.mean()
 
