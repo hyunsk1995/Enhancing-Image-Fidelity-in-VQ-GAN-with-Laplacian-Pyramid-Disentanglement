@@ -27,7 +27,7 @@ class MultiStageTransformer(pl.LightningModule):
                  pkeep=1.0,
                  sos_token=0,
                  unconditional=False,
-                 hier="top",
+                 hier=0,
                  ):
         super().__init__()
         self.be_unconditional = unconditional
@@ -81,7 +81,7 @@ class MultiStageTransformer(pl.LightningModule):
 
     def forward(self, x, c):
         # one step to produce the logits
-        _, z_indices = self.encode_to_z(x)
+        _, z_indices = self.encode_to_z(x, self.hier)
         _, c_indices = self.encode_to_c(c)
 
         if self.training and self.pkeep < 1.0:
@@ -93,8 +93,8 @@ class MultiStageTransformer(pl.LightningModule):
         else:
             a_indices = z_indices
 
-        if self.hier == "bottom":
-            _, p_indices = self.encode_to_p(x)
+        if self.hier < self.first_stage_model.num_stages-1:
+            _, p_indices = self.encode_to_z(x, self.hier+1)
 
             a_indices = torch.cat((p_indices, a_indices), dim=1)
 
@@ -108,7 +108,7 @@ class MultiStageTransformer(pl.LightningModule):
         # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
         logits = logits[:, c_indices.shape[1]-1:]
 
-        if self.hier == "bottom":
+        if self.hier < self.first_stage_model.num_stages-1:
             logits = logits[:, p_indices.shape[1]:]
         return logits, target
 
@@ -175,14 +175,20 @@ class MultiStageTransformer(pl.LightningModule):
         return x
 
     @torch.no_grad()
-    def encode_to_z(self, x):
-        if self.hier == "top":
-            quant_z, info = self.first_stage_model.encode_top(x)
-        elif self.hier == "bottom":
-            quant_z, info = self.first_stage_model.encode_bottom(x)
-        indices = info.view(quant_z.shape[0], -1)
+    def encode_to_z(self, x, hier):
+        prev = x
+        vqvae = self.first_stage_model
+        for i in range(hier+1):
+            enc = vqvae.encoder[i](prev)
+            prev = enc
+        quant = vqvae.quant_conv[hier](enc).permute(0, 2, 3, 1)
+        quant, diff, id = vqvae.quantize[hier](quant)
+        quant = quant.permute(0, 3, 1, 2)
+        diff = diff.unsqueeze(0)
+
+        indices = id.view(quant.shape[0], -1)
         indices = self.permuter(indices)
-        return quant_z, indices
+        return quant, indices
 
     @torch.no_grad()
     def encode_to_c(self, c):
@@ -192,32 +198,14 @@ class MultiStageTransformer(pl.LightningModule):
         if len(indices.shape) > 2:
             indices = indices.view(c.shape[0], -1)
         return quant_c, indices
-    
-    @torch.no_grad()
-    def encode_to_p(self, x):
-        """
-        Get codes from previous level.
-        """
-        assert self.hier != "top"
-        if self.hier == "bottom":
-            quant_p, info = self.first_stage_model.encode_top(x)
-        indices = info.view(quant_p.shape[0], -1)
-        indices = self.permuter(indices)
-
-        return quant_p, indices
 
     @torch.no_grad()
     def decode_to_img(self, index, zshape):
         index = self.permuter(index, reverse=True)
         bhwc = (zshape[0],zshape[2],zshape[3],zshape[1])
-        if self.hier == "top":
-            quant_z = self.first_stage_model.quantize_t.get_codebook_entry(
+        quant_z = self.first_stage_model.quantize[self.hier].get_codebook_entry(
                 index.reshape(-1), shape=bhwc)
-            x = self.first_stage_model.decoder_t(quant_z)
-        elif self.hier == "bottom":
-            quant_z = self.first_stage_model.quantize_b.get_codebook_entry(
-                index.reshape(-1), shape=bhwc)
-            x = self.first_stage_model.decoder_b(quant_z)
+        x = self.first_stage_model.decoder[self.hier](quant_z)
         
         return x
 
@@ -233,7 +221,7 @@ class MultiStageTransformer(pl.LightningModule):
         x = x.to(device=self.device)
         c = c.to(device=self.device)
 
-        quant_z, z_indices = self.encode_to_z(x)
+        quant_z, z_indices = self.encode_to_z(x, self.hier)
         quant_c, c_indices = self.encode_to_c(c)
 
         # create a "half"" sample

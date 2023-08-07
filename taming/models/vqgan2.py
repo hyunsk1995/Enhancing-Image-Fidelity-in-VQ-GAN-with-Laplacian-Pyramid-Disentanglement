@@ -53,7 +53,7 @@ class HierarchicalVQModel(pl.LightningModule):
             if i > 0:
                 self.encoder.append(Encoder(channel, channel, n_res_block, n_res_channel, stride=2))
             self.quant_conv.append(torch.nn.Conv2d(channel, embed_dim, 1))
-            self.quantize.append(VectorQuantizer(embed_dim, n_embed))
+            self.quantize.append(VectorQuantizer(embed_dim, n_embed[i]))
             self.decoder.append(Decoder(embed_dim, in_channel, channel, n_res_block, n_res_channel, stride=4))
 
         self.loss = instantiate_from_config(lossconfig)        
@@ -109,7 +109,7 @@ class HierarchicalVQModel(pl.LightningModule):
             prev = enc[i]
 
         return quant, diff, id
-        
+    
     def decode(self, quant):
         dec = []
         for i in range(self.num_stages):
@@ -173,8 +173,7 @@ class HierarchicalVQModel(pl.LightningModule):
         xrec, dec, _ = self(x)
 
         dis = self.disentangle(x, self.num_stages)
-        log["input_lf"] = dis[0]
-        log["input_hf"] = dis[1]
+
         if x.shape[1] > 3:
             # colorize with random projection
             assert xrec.shape[1] > 3
@@ -182,8 +181,10 @@ class HierarchicalVQModel(pl.LightningModule):
             xrec = self.to_rgb(xrec)
         log["inputs"] = x
         log["reconstructions"] = xrec
-        log["recon_lf"] = dec[0]
-        log["recon_hf"] = dec[1]
+        for stage in range(self.num_stages):
+            log["input_stage{}".format(stage+1)] = dis[stage]
+            log["recon_stage{}".format(stage+1)] = dec[stage]
+        
         return log
 
     def to_rgb(self, x):
