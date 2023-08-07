@@ -206,7 +206,6 @@ class MultiStageTransformer(pl.LightningModule):
         quant_z = self.first_stage_model.quantize[self.hier].get_codebook_entry(
                 index.reshape(-1), shape=bhwc)
         x = self.first_stage_model.decoder[self.hier](quant_z)
-        
         return x
 
     @torch.no_grad()
@@ -232,6 +231,8 @@ class MultiStageTransformer(pl.LightningModule):
                                    sample=True,
                                    top_k=top_k if top_k is not None else 100,
                                    callback=callback if callback is not None else lambda k: None)
+        # print(index_sample)
+        # print(z_indices)
         x_sample = self.decode_to_img(index_sample, quant_z.shape)
 
         # sample
