@@ -3,7 +3,7 @@ model:
   target: taming.models.vqgan2.HierarchicalVQModel
   params:
     embed_dim: 64
-    n_embed: 512
+    n_embed: [512, 512]
     ddconfig:
       double_z: False
       z_channels: 256
@@ -28,12 +28,12 @@ data:
     batch_size: 160
     num_workers: 8
     train:
-      target: taming.data.faceshq.FacesHQTrain
+      target: taming.data.faceshq.Faces256HQTrain
       params:
         size: 256
         crop_size: 256
     validation:
-      target: taming.data.faceshq.FacesHQValidation
+      target: taming.data.faceshq.Faces256HQValidation
       params:
         size: 256
         crop_size: 256
