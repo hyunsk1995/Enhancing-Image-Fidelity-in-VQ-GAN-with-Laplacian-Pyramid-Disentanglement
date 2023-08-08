@@ -7,7 +7,7 @@ model:
     transformer_config:
       target: taming.modules.transformer.mingpt.GPT
       params:
-        vocab_size: 512
+        vocab_size: 256
         block_size: 1280
         n_layer: 24
         n_head: 16
@@ -15,9 +15,9 @@ model:
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: logs/2023-08-05T11-11-50_ffhq256_vqgan_3stage/testtube/version_0/checkpoints/epoch=199.ckpt
+        ckpt_path: logs/2023-08-06T06-52-00_ffhq256_vqgan_3stage/testtube/version_0/checkpoints/epoch=199.ckpt
         embed_dim: 64
-        n_embed: 512
+        n_embed: [128, 256, 512]
         num_stages: 3
         ddconfig:
           double_z: false
