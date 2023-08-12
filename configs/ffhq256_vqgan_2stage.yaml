@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 4.5e-6
+  base_learning_rate: 1.5e-6
   target: taming.models.vqgan2.HierarchicalVQModel
   params:
     embed_dim: 64
@@ -28,12 +28,12 @@ data:
     batch_size: 160
     num_workers: 8
     train:
-      target: taming.data.faceshq.Faces256HQTrain
+      target: taming.data.faceshq.FacesHQ256Train
       params:
         size: 256
         crop_size: 256
     validation:
-      target: taming.data.faceshq.Faces256HQValidation
+      target: taming.data.faceshq.FacesHQ256Validation
       params:
         size: 256
         crop_size: 256
