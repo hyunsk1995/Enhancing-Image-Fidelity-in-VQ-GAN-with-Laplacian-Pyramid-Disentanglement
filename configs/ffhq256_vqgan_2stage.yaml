@@ -3,7 +3,7 @@ model:
   target: taming.models.vqgan2.HierarchicalVQModel
   params:
     embed_dim: 64
-    n_embed: [512, 256]
+    n_embed: [256, 512]
     ddconfig:
       double_z: False
       z_channels: 256
