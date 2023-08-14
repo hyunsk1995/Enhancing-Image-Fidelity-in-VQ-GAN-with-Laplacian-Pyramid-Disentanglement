@@ -86,6 +86,8 @@ class MultiStageTransformer(pl.LightningModule):
     def forward(self, x, c):
         # one step to produce the logits
         prev = None
+        logits = []
+        targets = []
         for i in range(self.num_stages):
             hier = (self.num_stages-1) -i
             _, z_indices = self.encode_to_z(x, hier)
@@ -106,12 +108,14 @@ class MultiStageTransformer(pl.LightningModule):
             # differently because we are conditioning)
             target = z_indices
             # make the prediction
-            logits, _, feature = self.transformer[hier](cz_indices[:, :-1], prev)
+            logit, _, feature = self.transformer[hier](cz_indices[:, :-1], prev)
             # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
-            logits = logits[:, c_indices.shape[1]-1:]
+            logit = logit[:, c_indices.shape[1]-1:]
+            logits.append(logit)
+            targets.append(target)
             prev = feature
 
-        return logits, target
+        return logits, targets
 
     def top_k_logits(self, logits, k):
         v, ix = torch.topk(logits, k)
@@ -241,16 +245,15 @@ class MultiStageTransformer(pl.LightningModule):
 
             x_rec = self.decode_to_img(z_indices, quant_z.shape, hier)
 
-            log["inputs"] = x
-            log["reconstructions"] = x_rec
-            log["recon_stage"+str(i)] = x_sample
-
+            log["recon_stage"+str(i+1)] = x_rec
+            log["sample_stage"+str(i+1)] = x_sample
             prev = feature
-        
+
         # log["samples_half"] = x_sample
         # log["samples_nopix"] = x_sample_nopix
         # log["samples_det"] = x_sample_det
-        
+        log["inputs"] = x
+
         return log
 
 
@@ -337,19 +340,24 @@ class MultiStageTransformer(pl.LightningModule):
 
     def shared_step(self, batch, batch_idx):
         x, c = self.get_xc(batch)
-        logits, target = self(x, c)
-        loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
-        return loss
+        logits, targets = self(x, c)
+        loss = []
+        for logit, target in zip(logits, targets):
+            loss.append(F.cross_entropy(logit.reshape(-1, logit.size(-1)), target.reshape(-1)))
+        
+        return loss #sum(loss)
 
     def training_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
-        self.log("train/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        return loss
+        for i, l in enumerate(loss):
+            self.log("train/loss/stage_{}".format(i+1), l, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        return sum(loss)
 
     def validation_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
-        self.log("val/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        return loss
+        for i, l in enumerate(loss):
+            self.log("train/loss/stage_{}".format(i+1), l, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        return sum(loss)
 
     def configure_optimizers(self):
         """

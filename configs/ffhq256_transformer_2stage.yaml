@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 4.5e-06
+  base_learning_rate: 1.5e-06
   target: taming.models.multistage_transformer.MultiStageTransformer
   params:
     num_stages: 2
