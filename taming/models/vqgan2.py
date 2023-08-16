@@ -164,9 +164,6 @@ class HierarchicalVQModel(pl.LightningModule):
 
         opt_ae = torch.optim.Adam(opt_list,
                                   lr=lr, betas=(0.5, 0.9))
-        
-        for key in opt_list:
-            print(key)
         return [opt_ae], []
 
     def log_images(self, batch, **kwargs):
