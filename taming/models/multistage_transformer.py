@@ -28,23 +28,20 @@ class MultiStageTransformer(pl.LightningModule):
                  pkeep=1.0,
                  sos_token=0,
                  unconditional=False,
-                 num_stages=2,
+                 hier=2,
                  ):
         super().__init__()
         self.be_unconditional = unconditional
         self.sos_token = sos_token
         self.first_stage_key = first_stage_key
         self.cond_stage_key = cond_stage_key
-        self.num_stages = num_stages
+        self.hier = hier
         self.init_first_stage_from_ckpt(first_stage_config)
         self.init_cond_stage_from_ckpt("__is_unconditional__") #cond_stage_config)
         if permuter_config is None:
             permuter_config = {"target": "taming.modules.transformer.permuter.Identity"}
         self.permuter = instantiate_from_config(config=permuter_config)
-        # self.transformer = instantiate_from_config(config=transformer_config)
-        self.transformer = nn.ModuleList()
-        for stage in range(num_stages):
-            self.transformer.append(instantiate_from_config(config=transformer_config[stage]))
+        self.transformer = instantiate_from_config(config=transformer_config)
 
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
@@ -86,34 +83,28 @@ class MultiStageTransformer(pl.LightningModule):
     def forward(self, x, c):
         # one step to produce the logits
         prev = None
-        logits = []
-        targets = []
-        for i in range(self.num_stages):
-            hier = (self.num_stages-1) -i
-            _, z_indices = self.encode_to_z(x, hier)
-            _, c_indices = self.encode_to_c(c)
+        _, z_indices = self.encode_to_z(x)
+        _, c_indices = self.encode_to_c(c)
 
-            if self.training and self.pkeep < 1.0:
-                mask = torch.bernoulli(self.pkeep*torch.ones(z_indices.shape,
-                                                            device=z_indices.device))
-                mask = mask.round().to(dtype=torch.int64)
-                r_indices = torch.randint_like(z_indices, self.transformer[hier].config.vocab_size)
-                a_indices = mask*z_indices+(1-mask)*r_indices
-            else:
-                a_indices = z_indices
+        if self.training and self.pkeep < 1.0:
+            mask = torch.bernoulli(self.pkeep*torch.ones(z_indices.shape,
+                                                        device=z_indices.device))
+            mask = mask.round().to(dtype=torch.int64)
+            r_indices = torch.randint_like(z_indices, self.transformer.config.vocab_size)
+            a_indices = mask*z_indices+(1-mask)*r_indices
+        else:
+            a_indices = z_indices
 
-            cz_indices = torch.cat((c_indices, a_indices), dim=1)
+        cz_indices = torch.cat((c_indices, a_indices), dim=1)
 
-            # target includes all sequence elements (no need to handle first one
-            # differently because we are conditioning)
-            target = z_indices
-            # make the prediction
-            logit, _, feature = self.transformer[hier](cz_indices[:, :-1], prev)
-            # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
-            logit = logit[:, c_indices.shape[1]-1:]
-            logits.append(logit)
-            targets.append(target)
-            prev = feature
+        # target includes all sequence elements (no need to handle first one
+        # differently because we are conditioning)
+        targets = z_indices
+        # make the prediction
+        logits, _, feature = self.transformer(cz_indices[:, :-1], prev)
+        # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
+        logits = logits[:, c_indices.shape[1]-1:]
+        # prev = feature
 
         return logits, targets
 
@@ -124,10 +115,10 @@ class MultiStageTransformer(pl.LightningModule):
         return out
     
     @torch.no_grad()
-    def sample(self, x, c, steps, hier, prev, temperature=1.0, sample=False, top_k=None,
+    def sample(self, x, c, steps, prev, temperature=1.0, sample=False, top_k=None,
                callback=lambda k: None):
         x = torch.cat((c,x),dim=1)
-        block_size = self.transformer[hier].get_block_size()
+        block_size = self.transformer.get_block_size()
         assert not self.transformer.training
         if self.pkeep <= 0.0:
             # one pass suffices since input is pure noise anyway
@@ -136,7 +127,7 @@ class MultiStageTransformer(pl.LightningModule):
             #noise = torch.randint(self.transformer.config.vocab_size, noise_shape).to(x)
             noise = c.clone()[:,x.shape[1]-c.shape[1]:-1]
             x = torch.cat((x,noise),dim=1)
-            logits, _, feature = self.transformer[hier](x, prev)
+            logits, _, feature = self.transformer(x, prev)
             # take all logits for now and scale by temp
             logits = logits / temperature
             # optionally crop probabilities to only the top k options
@@ -160,7 +151,7 @@ class MultiStageTransformer(pl.LightningModule):
                 callback(k)
                 assert x.size(1) <= block_size # make sure model can see conditioning
                 x_cond = x if x.size(1) <= block_size else x[:, -block_size:]  # crop context if needed
-                logits, _, feature = self.transformer[hier](x_cond, prev)
+                logits, _, feature = self.transformer(x_cond, prev)
                 # pluck the logits at the final step and scale by temperature
                 logits = logits[:, -1, :] / temperature
                 # optionally crop probabilities to only the top k options
@@ -180,14 +171,14 @@ class MultiStageTransformer(pl.LightningModule):
         return x, feature
 
     @torch.no_grad()
-    def encode_to_z(self, x, hier):
+    def encode_to_z(self, x):
         prev = x
         vqvae = self.first_stage_model
-        for i in range(hier+1):
+        for i in range(self.hier+1):
             enc = vqvae.encoder[i](prev)
             prev = enc
-        quant = vqvae.quant_conv[hier](enc).permute(0, 2, 3, 1)
-        quant, diff, id = vqvae.quantize[hier](quant)
+        quant = vqvae.quant_conv[self.hier](enc).permute(0, 2, 3, 1)
+        quant, diff, id = vqvae.quantize[self.hier](quant)
         quant = quant.permute(0, 3, 1, 2)
         diff = diff.unsqueeze(0)
 
@@ -205,12 +196,12 @@ class MultiStageTransformer(pl.LightningModule):
         return quant_c, indices
 
     @torch.no_grad()
-    def decode_to_img(self, index, zshape, hier):
+    def decode_to_img(self, index, zshape):
         index = self.permuter(index, reverse=True)
         bhwc = (zshape[0],zshape[2],zshape[3],zshape[1])
-        quant_z = self.first_stage_model.quantize[hier].get_codebook_entry(
+        quant_z = self.first_stage_model.quantize[self.hier].get_codebook_entry(
                 index.reshape(-1), shape=bhwc)
-        x = self.first_stage_model.decoder[hier](quant_z)
+        x = self.first_stage_model.decoder[self.hier](quant_z)
         return x
 
     @torch.no_grad()
@@ -226,28 +217,24 @@ class MultiStageTransformer(pl.LightningModule):
         c = c.to(device=self.device)
 
         prev = None
-        for i in range(self.num_stages):
-            hier = (self.num_stages-1) - i
-            quant_z, z_indices = self.encode_to_z(x, hier)
-            quant_c, c_indices = self.encode_to_c(c)
+        quant_z, z_indices = self.encode_to_z(x)
+        quant_c, c_indices = self.encode_to_c(c)
 
-            # create a "half"" sample
-            z_start_indices = z_indices[:,:z_indices.shape[1]//2]
-            index_sample, feature = self.sample(z_start_indices, c_indices,
-                                       steps=z_indices.shape[1]-z_start_indices.shape[1],
-                                       prev=prev,
-                                       hier=hier,
-                                       temperature=temperature if temperature is not None else 1.0,
-                                       sample=True,
-                                       top_k=top_k if top_k is not None else 100,
-                                       callback=callback if callback is not None else lambda k: None)
-            x_sample = self.decode_to_img(index_sample, quant_z.shape, hier)
+        # create a "half"" sample
+        z_start_indices = z_indices[:,:z_indices.shape[1]//2]
+        index_sample, feature = self.sample(z_start_indices, c_indices,
+                                    steps=z_indices.shape[1]-z_start_indices.shape[1],
+                                    prev=prev,
+                                    temperature=temperature if temperature is not None else 1.0,
+                                    sample=True,
+                                    top_k=top_k if top_k is not None else 100,
+                                    callback=callback if callback is not None else lambda k: None)
+        x_sample = self.decode_to_img(index_sample, quant_z.shape)
 
-            x_rec = self.decode_to_img(z_indices, quant_z.shape, hier)
+        x_rec = self.decode_to_img(z_indices, quant_z.shape)
 
-            log["recon_stage"+str(i+1)] = x_rec
-            log["sample_stage"+str(i+1)] = x_sample
-            prev = feature
+        log["reconstruction"] = x_rec
+        log["sample_half"] = x_sample
 
         # log["samples_half"] = x_sample
         # log["samples_nopix"] = x_sample_nopix
@@ -255,17 +242,6 @@ class MultiStageTransformer(pl.LightningModule):
         log["inputs"] = x
 
         return log
-
-
-        # create a "half"" sample
-        # z_start_indices = z_indices[:,:z_indices.shape[1]//2]
-        # index_sample = self.sample(z_start_indices, c_indices,
-        #                            steps=z_indices.shape[1]-z_start_indices.shape[1],
-        #                            temperature=temperature if temperature is not None else 1.0,
-        #                            sample=True,
-        #                            top_k=top_k if top_k is not None else 100,
-        #                            callback=callback if callback is not None else lambda k: None)
-        # x_sample = self.decode_to_img(index_sample, quant_z.shape)
 
         # sample
         # z_start_indices = z_indices[:, :0]
@@ -340,24 +316,19 @@ class MultiStageTransformer(pl.LightningModule):
 
     def shared_step(self, batch, batch_idx):
         x, c = self.get_xc(batch)
-        logits, targets = self(x, c)
-        loss = []
-        for logit, target in zip(logits, targets):
-            loss.append(F.cross_entropy(logit.reshape(-1, logit.size(-1)), target.reshape(-1)))
-        
-        return loss #sum(loss)
+        logits, target = self(x, c)
+        loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), target.reshape(-1))
+        return loss
 
     def training_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
-        for i, l in enumerate(loss):
-            self.log("train/loss/stage_{}".format(i+1), l, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        return sum(loss)
+        self.log("train/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        return loss
 
     def validation_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
-        for i, l in enumerate(loss):
-            self.log("train/loss/stage_{}".format(i+1), l, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        return sum(loss)
+        self.log("val/loss", loss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+        return loss
 
     def configure_optimizers(self):
         """
@@ -372,26 +343,25 @@ class MultiStageTransformer(pl.LightningModule):
         no_decay = set()
         whitelist_weight_modules = (torch.nn.Linear, )
         blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-        for stage in range(self.num_stages):
-            for mn, m in self.transformer[stage].named_modules():
-                for pn, p in m.named_parameters():
-                    fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
+        for mn, m in self.transformer.named_modules():
+            for pn, p in m.named_parameters():
+                fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
 
-                    if pn.endswith('bias'):
-                        # all biases will not be decayed
-                        no_decay.add(fpn)
-                    elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
-                        # weights of whitelist modules will be weight decayed
-                        decay.add(fpn)
-                    elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
-                        # weights of blacklist modules will NOT be weight decayed
-                        no_decay.add(fpn)
+                if pn.endswith('bias'):
+                    # all biases will not be decayed
+                    no_decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+                    # weights of whitelist modules will be weight decayed
+                    decay.add(fpn)
+                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+                    # weights of blacklist modules will NOT be weight decayed
+                    no_decay.add(fpn)
 
         # special case the position embedding parameter in the root GPT module as not decayed
         no_decay.add('pos_emb')
 
         # validate that we considered every parameter
-        param_dict = {pn: p for stage in range(self.num_stages) for pn, p in self.transformer[stage].named_parameters()}
+        param_dict = {pn: p for pn, p in self.transformer.named_parameters()}
         inter_params = decay & no_decay
         union_params = decay | no_decay
         assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )

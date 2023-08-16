@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 4.5e-06
+  base_learning_rate: 1.5e-06
   target: taming.models.multistage_transformer.MultiStageTransformer
   params:
     hier: 1
@@ -8,16 +8,16 @@ model:
       target: taming.modules.transformer.mingpt.GPT
       params:
         vocab_size: 512
-        block_size: 1280
-        n_layer: 24
+        block_size: 1024
+        n_layer: 12
         n_head: 16
         n_embd: 512
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: logs/2023-08-04T13-17-25_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=199.ckpt
+        ckpt_path: logs/2023-08-09T14-56-29_ffhq256_vqgan_2stage/testtube/version_0/checkpoints/epoch=199.ckpt
         embed_dim: 64
-        n_embed: [512, 512]
+        n_embed: [256, 512]
         ddconfig:
           double_z: false
           z_channels: 256
@@ -48,7 +48,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 3
+    batch_size: 1
     num_workers: 8
     train:
       target: taming.data.faceshq.FacesHQ256Train
