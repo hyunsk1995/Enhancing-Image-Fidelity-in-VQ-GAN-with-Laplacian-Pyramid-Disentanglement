@@ -392,16 +392,26 @@ class MultiStageTransformer(pl.LightningModule):
 
         # validate that we considered every parameter
         param_dict = {pn: p for stage in range(self.num_stages) for pn, p in self.transformer[stage].named_parameters()}
+        param_list = list()
+        for stage in range(self.num_stages):
+            param_list += self.transformer[stage].named_parameters()
         inter_params = decay & no_decay
         union_params = decay | no_decay
         assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
         assert len(param_dict.keys() - union_params) == 0, "parameters %s were not separated into either decay/no_decay set!" \
                                                     % (str(param_dict.keys() - union_params), )
+        # for key in param_list:
+        #     print(key[0])
 
+        # for key in param_dict:
+        #     print(key)
         # create the pytorch optimizer object
-        optim_groups = [
-            {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": 0.01},
-            {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0},
-        ]
+        optim_groups = []
+
+        for key in param_list:
+            if key[0] in decay:
+                optim_groups.append({"params": key[1], "weight_decay": 0.01})
+            else:
+                optim_groups.append({"params": key[1], "weight_decay": 0.0})
         optimizer = torch.optim.AdamW(optim_groups, lr=self.learning_rate, betas=(0.9, 0.95))
         return optimizer
