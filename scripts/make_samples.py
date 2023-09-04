@@ -23,7 +23,7 @@ def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperat
 
     for i in range(start_i, qshape[2]):
         for j in range(start_j, qshape[3]):
-            # print("i, j:", i, j)
+            print("i, j:", i, j)
             cx = torch.cat((cidx, idx), dim=1)
             logits, _, feature = model.transformer[hier](cx[:,:-1], prev) # (B, block_size, vocab_size)
 
@@ -47,7 +47,7 @@ def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperat
     return idx, feature
 
 @torch.no_grad()
-def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=4):
+def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
     if len(dsets.datasets) > 1:
         split = sorted(dsets.datasets.keys())[0]
         dset = dsets.datasets[split]
@@ -59,6 +59,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=4):
         example = default_collate([dset[i] for i in indices])
 
         x = model.get_input("image", example).to(model.device)
+        print(x.shape)
         for i in range(x.shape[0]):
             save_image(x[i], os.path.join(outdir, "originals",
                                           "{:06}.png".format(indices[i])))
@@ -88,7 +89,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=4):
 
             idx = z_indices
 
-            half_sample = False
+            half_sample = True
             if half_sample:
                 start = idx.shape[1]//2
                 

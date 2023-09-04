@@ -31,10 +31,10 @@ data:
     train:
       target: taming.data.faceshq.FacesHQTrain
       params:
-        size: 256
+        size: 1024
         crop_size: 256
     validation:
       target: taming.data.faceshq.FacesHQValidation
       params:
-        size: 256
+        size: 1024
         crop_size: 256

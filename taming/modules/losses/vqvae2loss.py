@@ -52,7 +52,7 @@ class VQVAE2Loss(nn.Module):
 
 def disentangle(img, num_stage):
     assert img[0].shape == (3, 256, 256)    
-    img = gaussianBlur(img)
+    # img = gaussianBlur(img)
     disentangled = []
     prev = img
 

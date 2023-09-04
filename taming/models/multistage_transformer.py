@@ -356,7 +356,7 @@ class MultiStageTransformer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss = self.shared_step(batch, batch_idx)
         for i, l in enumerate(loss):
-            self.log("train/loss/stage_{}".format(i+1), l, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log("val/loss/stage_{}".format(i+1), l, prog_bar=True, logger=True, on_step=True, on_epoch=True)
         return sum(loss)
 
     def configure_optimizers(self):
