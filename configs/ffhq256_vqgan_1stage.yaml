@@ -3,7 +3,8 @@ model:
   target: taming.models.vqgan2.HierarchicalVQModel
   params:
     embed_dim: 64
-    n_embed: [256, 512]
+    n_embed: [512]
+    num_stages: 1
     ddconfig:
       double_z: False
       z_channels: 256
@@ -20,7 +21,7 @@ model:
     lossconfig:
       target: taming.modules.losses.vqvae2loss.VQVAE2Loss
       params:
-        codebook_weight: [0.25, 0.25]
+        codebook_weight: [0.25]
 
 data:
   target: main.DataModuleFromConfig

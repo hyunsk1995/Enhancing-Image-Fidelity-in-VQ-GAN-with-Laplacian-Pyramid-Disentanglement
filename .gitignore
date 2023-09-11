@@ -7,3 +7,4 @@ taming_transformers.egg-info
 *.jpg
 *.png
 checkpoints
+src
