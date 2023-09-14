@@ -201,6 +201,9 @@ class HierarchicalVQModel(pl.LightningModule):
         disentangled = []
         prev = img
 
+        if num_stage == 1:
+            return img
+
         for _ in range(num_stage-1):
             Downimg = pyrDown(prev)
             DownUp = pyrUp(Downimg)

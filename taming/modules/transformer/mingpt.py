@@ -252,7 +252,7 @@ class GPT(nn.Module):
 
         return logits, loss, feature
 
-    def forward_with_past(self, idx, embeddings=None, targets=None, past=None, past_length=None):
+    def forward_with_past(self, idx, prev=None, embeddings=None, targets=None, past=None, past_length=None):
         # inference only
         assert not self.training
         token_embeddings = self.tok_emb(idx)    # each index maps to a (learnable) vector
@@ -271,18 +271,25 @@ class GPT(nn.Module):
 
         x = self.drop(token_embeddings + position_embeddings)
         presents = []  # accumulate over layers
-        for i, block in enumerate(self.blocks):
-            x, present = block(x, layer_past=past[i, ...] if past is not None else None, return_present=True)
-            presents.append(present)
 
-        x = self.ln_f(x)
+        feature = x
+        if prev == None:
+            for i, block in enumerate(self.blocks_MSA):
+                feature, present = block(feature, layer_past=past[i, ...] if past is not None else None, return_present=True)
+                presents.append(present)
+        else:
+            for i, block in enumerate(self.blocks_MCA):
+                feature, present = block(feature, prev, layer_past=past[i, ...] if past is not None else None, return_present=True)
+                presents.append(present)
+
+        x = self.ln_f(feature)
         logits = self.head(x)
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-        return logits, loss, torch.stack(presents)  # _, _, n_layer, 2, b, nh, 1, dim_head
+        return logits, loss, torch.stack(presents), feature  # _, _, n_layer, 2, b, nh, 1, dim_head
 
 
 class DummyGPT(nn.Module):
@@ -394,16 +401,17 @@ def sample(model, x, steps, temperature=1.0, sample=False, top_k=None):
 
 
 @torch.no_grad()
-def sample_with_past(x, model, steps, temperature=1., sample_logits=True,
+def sample_with_past(x, model, prev, steps, temperature=1., sample_logits=True,
                      top_k=None, top_p=None, callback=None):
     # x is conditioning
     sample = x
     cond_len = x.shape[1]
     past = None
     for n in range(steps):
+        # print("step", n)
         if callback is not None:
             callback(n)
-        logits, _, present = model.forward_with_past(x, past=past, past_length=(n+cond_len-1))
+        logits, _, present, feature = model.forward_with_past(x, past=past, prev=prev, past_length=(n+cond_len-1))
         if past is None:
             past = [present]
         else:
@@ -421,7 +429,7 @@ def sample_with_past(x, model, steps, temperature=1., sample_logits=True,
         sample = torch.cat((sample, x), dim=1)
     del past
     sample = sample[:, cond_len:]  # cut conditioning off
-    return sample
+    return sample, feature
 
 
 #### clustering utils

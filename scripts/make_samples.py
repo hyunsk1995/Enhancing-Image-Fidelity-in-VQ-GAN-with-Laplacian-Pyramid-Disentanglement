@@ -78,6 +78,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
             _, c_indices = model.encode_to_c(c)
 
             qshape = quant_z.shape
+            print(qshape)
 
             # if cond_key == "segmentation":
             #     # get image from segmentation mask
@@ -102,7 +103,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
             start_j = start %qshape[3]
 
             idx, prev = AR_modeling(model, idx, prev, hier, c_indices, start_i, start_j, qshape, temperature, top_k)
-
+            print(idx.shape)
             x_sample = model.decode_to_img(idx, qshape, hier)
 
             for b in range(x_sample.shape[0]):

@@ -38,11 +38,12 @@ class VQVAE2Loss(nn.Module):
             loss += disentangle_loss[i].mean()
             loss += codebook_loss[i].mean() * self.codebook_weight[i]
             log_list["{}/stage{}_loss".format(split, i+1)] = disentangle_loss[i].detach().mean()
+            log_list["{}/quant_loss_stage{}".format(split, i+1)] = codebook_loss[i].detach().mean()
         
 
         log = {"{}/total_loss".format(split): loss.clone().detach().mean(),
-                "{}/quant_loss_top".format(split): codebook_loss[0].detach().mean(),
-                "{}/quant_loss_bottom".format(split): codebook_loss[1].detach().mean(),
+                # "{}/quant_loss_top".format(split): codebook_loss[0].detach().mean(),
+                # "{}/quant_loss_bottom".format(split): codebook_loss[1].detach().mean(),
                 "{}/rec_loss".format(split): rec_loss.detach().mean()
                 }
         
@@ -56,6 +57,9 @@ def disentangle(img, num_stage):
     disentangled = []
     prev = img
 
+    if num_stage == 1:
+        return img
+    
     for _ in range(num_stage-1):
         Downimg = pyrDown(prev)
         DownUp = pyrUp(Downimg)
