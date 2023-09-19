@@ -46,15 +46,15 @@ def sample_unconditional(model, batch_size, steps=[1024, 4096], temperature=None
                          dim_z=64, h=[32, 64], w=[32, 64], verbose_time=False):
     log = dict()
     assert model.be_unconditional, 'Expecting an unconditional model.'
-    c_indices = repeat(torch.tensor([model.sos_token]), '1 -> b 1', b=batch_size).to(model.device)  # sos token
     t1 = time.time()
 
     prev = None
     num_stages = model.num_stages
     for i in range(num_stages):
+        c_indices = repeat(torch.tensor([model.sos_token]), '1 -> b 1', b=batch_size).to(model.device)  # sos token
         qzshape = [batch_size, dim_z, h[i], w[i]]
         hier = (num_stages-1) - i
-        idx, prev = sample_with_past(c_indices, model.transformer[hier], prev, steps=steps[i],
+        idx, prev = sample_with_past(c_indices, model.transformer[hier], prev=prev, steps=steps[i],
                                         sample_logits=True, top_k=top_k, callback=callback,
                                         temperature=temperature, top_p=top_p)
         # print(idx.shape)
@@ -159,7 +159,7 @@ def get_parser():
         type=int,
         nargs="?",
         help="the batch size",
-        default=8
+        default=1
     )
     parser.add_argument(
         "-k",
@@ -167,7 +167,7 @@ def get_parser():
         type=int,
         nargs="?",
         help="top-k value to sample with",
-        default=250,
+        default=50,
     )
     parser.add_argument(
         "-t",

@@ -17,37 +17,8 @@ def save_image(x, path):
     x = ((x.detach().cpu().numpy().transpose(1,2,0)+1.0)*127.5).clip(0,255).astype(np.uint8)
     Image.fromarray(x).save(path)
 
-# logits : (B, hw, vocab_size)
-def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperature, top_k):
-    sample = True
-
-    for i in range(start_i, qshape[2]):
-        for j in range(start_j, qshape[3]):
-            # print("i, j:", i, j)
-            cx = torch.cat((cidx, idx), dim=1)
-            logits, _, feature = model.transformer[hier](cx[:,:-1], prev) # (B, block_size, vocab_size)
-            # print(logits.shape)
-            logits = logits[:, -qshape[2]*qshape[3]:, :]
-            logits = logits[:, i*qshape[2]+j, :]
-            logits /= temperature
-
-            if top_k is not None:
-                logits = model.top_k_logits(logits, top_k)
-            probs = torch.nn.functional.softmax(logits, dim=-1)
-
-            if sample:
-                ix = torch.multinomial(probs, num_samples=1)
-            else:
-                _, ix = torch.topk(probs, k=1, dim=-1)
-            
-            idx[:,i*qshape[2]+j] = ix.squeeze()
-        
-    idx = idx.reshape(qshape[0], qshape[2], qshape[3])
-
-    return idx, feature
-
 @torch.no_grad()
-def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
+def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=16):
     if len(dsets.datasets) > 1:
         split = sorted(dsets.datasets.keys())[0]
         dset = dsets.datasets[split]
@@ -58,74 +29,18 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
         indices = list(range(start_idx, start_idx+batch_size))
         example = default_collate([dset[i] for i in indices])
 
-        x = model.get_input("image", example).to(model.device)
-        print(x.shape)
+        x = model.get_input(example, "image").to(model.device)
+        
         for i in range(x.shape[0]):
             save_image(x[i], os.path.join(outdir, "originals",
                                           "{:06}.png".format(indices[i])))
 
-        cond_key = model.cond_stage_key
-        c = model.get_input(cond_key, example).to(model.device)
-
-        scale_factor = 1.0
-
-        num_stages = model.num_stages
-
-        prev = None
-        for i in range(num_stages):
-            hier = (num_stages-1) - i
-            quant_z, z_indices = model.encode_to_z(x, hier)
-            _, c_indices = model.encode_to_c(c)
-
-            qshape = quant_z.shape
-            print(qshape)
-
-            # if cond_key == "segmentation":
-            #     # get image from segmentation mask
-            #     num_classes = c.shape[1]
-            #     c = torch.argmax(c, dim=1, keepdim=True)
-            #     c = torch.nn.functional.one_hot(c, num_classes=num_classes)
-            #     c = c.squeeze(1).permute(0, 3, 1, 2).float()
-            #     c = model.cond_stage_model.to_rgb(c)
-
-            idx = z_indices
-
-            half_sample = True
-            if half_sample:
-                start = idx.shape[1]//2
-                
-            else:
-                start = 0
-
-            idx[:,start:] = 0
-            # t_idx = t_idx.reshape(qshape_t[0],qshape_t[2],qshape_t[3])
-            start_i = start//qshape[3]
-            start_j = start %qshape[3]
-
-            idx, prev = AR_modeling(model, idx, prev, hier, c_indices, start_i, start_j, qshape, temperature, top_k)
-            # print(idx.shape)
-            x_sample = model.decode_to_img(idx, qshape, hier)
-
-            for b in range(x_sample.shape[0]):
-                save_image(x_sample[b], os.path.join(outdir, "samples_stage{}".format(i+1),
-                                                "{:06}.png".format(indices[b])))
-
-            if i > 0:       
-                full_sample = pyrUp(full_sample) + x_sample
-                # full_recon = pyrUp(full_recon) + x_rec
-            else:
-                full_sample = x_sample
-                # full_recon = x_rec
-
         # xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
 
-        full_recon, _, _ = model.first_stage_model(x)
+        full_recon, _, _ = model(x)
 
         for i in range(full_recon.shape[0]):
             save_image(full_recon[i], os.path.join(outdir, "reconstructions",
-                                                "{:06}.png".format(indices[i])))
-        for i in range(full_sample.shape[0]):
-            save_image(full_sample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))
 
 
@@ -294,8 +209,6 @@ if __name__ == "__main__":
                                                            opt.temperature))
     os.makedirs(outdir, exist_ok=True)
     print("Writing samples to ", outdir)
-    for k in ["originals", "reconstructions", "samples"]:
+    for k in ["originals", "reconstructions"]:
         os.makedirs(os.path.join(outdir, k), exist_ok=True)
-    for i in range(model.num_stages):
-        os.makedirs(os.path.join(outdir, "samples_stage{}".format(i+1)), exist_ok=True)
     run_conditional(model, dsets, outdir, opt.top_k, opt.temperature)

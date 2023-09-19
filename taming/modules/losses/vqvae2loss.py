@@ -35,7 +35,9 @@ class VQVAE2Loss(nn.Module):
         
         for i in range(num_stage):
             disentangle_loss.append(torch.abs(disentangled[i] - dec[i]))
-            loss += disentangle_loss[i].mean()
+
+            if i == 0:
+                loss += disentangle_loss[i].mean()
             loss += codebook_loss[i].mean() * self.codebook_weight[i]
             log_list["{}/stage{}_loss".format(split, i+1)] = disentangle_loss[i].detach().mean()
             log_list["{}/quant_loss_stage{}".format(split, i+1)] = codebook_loss[i].detach().mean()
@@ -53,7 +55,7 @@ class VQVAE2Loss(nn.Module):
 
 def disentangle(img, num_stage):
     assert img[0].shape == (3, 256, 256)    
-    # img = gaussianBlur(img)
+    img = gaussianBlur(img)
     disentangled = []
     prev = img
 

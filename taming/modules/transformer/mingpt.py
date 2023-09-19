@@ -113,7 +113,11 @@ class CrossAttention(nn.Module):
         k = self.key(source).view(B, S, self.n_head, C // self.n_head).transpose(1, 2)
         q = self.query(target).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
         v = self.value(source).view(B, S, self.n_head, C // self.n_head).transpose(1, 2)
-
+        
+        # if layer_past is not None:
+        #     past_key, past_value = layer_past
+        #     k = torch.cat((past_key, k), dim=-2)
+        #     v = torch.cat((past_value, v), dim=-2)
         present = torch.stack((k, v))
 
         att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
@@ -254,6 +258,8 @@ class GPT(nn.Module):
 
     def forward_with_past(self, idx, prev=None, embeddings=None, targets=None, past=None, past_length=None):
         # inference only
+        # if prev is not None:
+            # print("prev:", prev.shape)
         assert not self.training
         token_embeddings = self.tok_emb(idx)    # each index maps to a (learnable) vector
         if embeddings is not None:              # prepend explicit embeddings
@@ -262,7 +268,10 @@ class GPT(nn.Module):
         if past is not None:
             assert past_length is not None
             past = torch.cat(past, dim=-2)   # n_layer, 2, b, nh, len_past, dim_head
+            past = past[:,:,:,:,-past_length:,:]
+
             past_shape = list(past.shape)
+            # print(past_length, past_shape[4])
             expected_shape = [self.config.n_layer, 2, idx.shape[0], self.config.n_head, past_length, self.config.n_embd//self.config.n_head]
             assert past_shape == expected_shape, f"{past_shape} =/= {expected_shape}"
             position_embeddings = self.pos_emb[:, past_length, :]  # each position maps to a (learnable) vector
@@ -407,11 +416,20 @@ def sample_with_past(x, model, prev, steps, temperature=1., sample_logits=True,
     sample = x
     cond_len = x.shape[1]
     past = None
+    feature = None
     for n in range(steps):
         # print("step", n)
         if callback is not None:
             callback(n)
-        logits, _, present, feature = model.forward_with_past(x, past=past, prev=prev, past_length=(n+cond_len-1))
+
+        logits, _, present, _feature = model.forward_with_past(x, past=past, prev=prev, past_length=(n+cond_len-1))
+
+        if feature is None:
+            feature = _feature
+        else:
+            feature = torch.cat((feature, _feature), dim=1)
+        # if n == 0:
+        #     print(logits.shape)
         if past is None:
             past = [present]
         else:

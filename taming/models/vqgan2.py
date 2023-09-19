@@ -197,7 +197,7 @@ class HierarchicalVQModel(pl.LightningModule):
     
     def disentangle(self, img, num_stage):
         assert img[0].shape == (3, 256, 256)    
-        # img = gaussianBlur(img)
+        img = gaussianBlur(img)
         disentangled = []
         prev = img
 

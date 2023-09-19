@@ -22,7 +22,7 @@ model:
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: logs/2023-09-04T19-12-00_ffhq256_vqgan_2stage/testtube/version_0/checkpoints/epoch=199.ckpt
+        ckpt_path: logs/2023-09-16T19-07-56_ffhq256_vqgan_2stage/testtube/version_2/checkpoints/epoch=799.ckpt
         embed_dim: 64
         n_embed: [256, 512]
         ddconfig:
