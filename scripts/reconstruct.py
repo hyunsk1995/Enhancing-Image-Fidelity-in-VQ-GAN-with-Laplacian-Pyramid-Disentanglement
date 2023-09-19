@@ -52,7 +52,7 @@ def reconstruct_with_vqgan(x, model):
   xrec = model.decode(quant_t, quant_b)
   return xrec
 
-log = "2023-07-18T22-44-00"
+log = "2023-09-02T01-11-20"
 config256 = load_config("logs/{}_ffhq256_vqgan/configs/{}-project.yaml".format(log, log))
 model256 = load_vqgan(config256, "logs/{}_ffhq256_vqgan/testtube/version_0/checkpoints/epoch=199.ckpt".format(log)).to(DEVICE)
 font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-BoldItalic.ttf", 22)

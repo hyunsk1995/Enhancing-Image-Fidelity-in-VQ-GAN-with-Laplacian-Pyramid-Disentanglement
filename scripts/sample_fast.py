@@ -40,20 +40,28 @@ def sample_classconditional(top_model, bottom_model, batch_size, class_label, st
 
 
 @torch.no_grad()
-def sample_unconditional(top_model, bottom_model,batch_size, steps=256, temperature=None, top_k=None, top_p=None, callback=None,
+def sample_unconditional(top_model, bottom_model, batch_size, steps=[1024, 4096], temperature=None, top_k=None, top_p=None, callback=None,
                          dim_z=256, h=16, w=16, verbose_time=False):
     log = dict()
-    qzshape = [batch_size, dim_z, h, w]
-    assert model.be_unconditional, 'Expecting an unconditional model.'
-    c_indices = repeat(torch.tensor([model.sos_token]), '1 -> b 1', b=batch_size).to(model.device)  # sos token
+    qshape_t = [batch_size, 64, 32, 32]
+    qshape_b = [batch_size, 64, 64, 64]
+    # assert model.be_unconditional, 'Expecting an unconditional model.'
+    ct_indices = repeat(torch.tensor([top_model.sos_token]), '1 -> b 1', b=batch_size).to(top_model.device)  # sos token
+    cb_indices = repeat(torch.tensor([bottom_model.sos_token]), '1 -> b 1', b=batch_size).to(bottom_model.device)  # sos token
+    
     t1 = time.time()
-    index_sample = sample_with_past(c_indices, model.transformer, steps=steps,
+    index_t = sample_with_past(ct_indices, top_model.transformer, steps=steps[0],
+                                    sample_logits=True, top_k=top_k, callback=callback,
+                                    temperature=temperature, top_p=top_p)
+    
+    cb_indices = torch.cat((cb_indices, index_t.reshape(qshape_t[0], -1)), dim=1)
+    index_b = sample_with_past(cb_indices, bottom_model.transformer, steps=steps[1],
                                     sample_logits=True, top_k=top_k, callback=callback,
                                     temperature=temperature, top_p=top_p)
     if verbose_time:
         sampling_time = time.time() - t1
         print(f"Full sampling takes about {sampling_time:.2f} seconds.")
-    x_sample = model.decode_to_img(index_sample, qzshape)
+    x_sample = top_model.decode_full_img(index_t, index_b, qshape_t, qshape_b)
     log["samples"] = x_sample
     return log
 
@@ -63,7 +71,7 @@ def run(logdir, top_model, bottom_model, batch_size, temperature, top_k, uncondi
         given_classes=None, top_p=None):
     batches = [batch_size for _ in range(num_samples//batch_size)] + [num_samples % batch_size]
     
-    # unconditional = True
+    unconditional = True
     
     if not unconditional:
         assert given_classes is not None
@@ -255,7 +263,6 @@ if __name__ == "__main__":
 
     top_config, top_ckpt = get_config(opt.top, opt.base)
     bottom_config, bottom_ckpt = get_config(opt.bottom, opt.base)
-    print(top_config, bottom_config)
 
     top_model, top_gs = load_model(top_config, top_ckpt, gpu=True, eval_mode=True)
     bottom_model, bottom_gs = load_model(bottom_config, bottom_ckpt, gpu=True, eval_mode=True)

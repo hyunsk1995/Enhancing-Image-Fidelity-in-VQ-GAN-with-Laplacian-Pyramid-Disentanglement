@@ -111,7 +111,6 @@ class MultiStageTransformer(pl.LightningModule):
 
         if self.hier == "bottom":
             logits = logits[:, p_indices.shape[1]:]
-        print(logits.shape, target.shape)
         return logits, target
 
     def top_k_logits(self, logits, k):
