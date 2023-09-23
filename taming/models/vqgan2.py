@@ -61,8 +61,7 @@ class HierarchicalVQModel(pl.LightningModule):
             self.decoder.append(Decoder(**ddconfig))
             self.post_quant_conv.append(torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1))
 
-        self.loss = instantiate_from_config(lossconfig)        
-        # self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        self.loss = instantiate_from_config(lossconfig)
         
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
@@ -135,28 +134,44 @@ class HierarchicalVQModel(pl.LightningModule):
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format)
         return x.float()
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx, optimizer_idx):
         x = self.get_input(batch, self.image_key)
         xrec, dec, diff = self(x)
         
-        # autoencode
-        aeloss, log_dict_ae = self.loss(diff, x, dec, xrec, split="train")
-        self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-        return aeloss
+        if optimizer_idx == 0:
+            # autoencode            
+            aeloss, log_dict_ae = self.loss(diff, x, dec, xrec, optimizer_idx, self.global_step,
+                                             last_layer=self.get_last_layer(), split="train")
+            self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            return aeloss
+        
+        if optimizer_idx == 1:
+            # discriminator
+            discloss, log_dict_disc = self.loss(diff, x, dec, xrec, optimizer_idx, self.global_step,
+                                            last_layer=self.get_last_layer(), split="train")
+            self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            return discloss
+
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
         xrec, dec, diff = self(x)
         
         # autoencode
-        aeloss, log_dict_ae = self.loss(diff, x, dec, xrec, split="val")
+        aeloss, log_dict_ae = self.loss(diff, x, dec, xrec, 0, self.global_step,
+                                         last_layer=self.get_last_layer(), split="val")
+        
+        discloss, log_dict_disc = self.loss(diff, x, dec, xrec, 1, self.global_step,
+                                         last_layer=self.get_last_layer(), split="val")
+        
         rec_loss = log_dict_ae["val/rec_loss"]
         self.log("val/rec_loss", rec_loss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
         self.log("val/aeloss", aeloss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
         self.log_dict(log_dict_ae)
+        self.log_dict(log_dict_disc)
         return self.log_dict
 
     def configure_optimizers(self):
@@ -167,11 +182,19 @@ class HierarchicalVQModel(pl.LightningModule):
             opt_list += list(self.decoder[i].parameters())
             opt_list += list(self.quantize[i].parameters())
             opt_list += list(self.quant_conv[i].parameters())
+            opt_list += list(self.post_quant_conv[i].parameters())
 
-        opt_ae = torch.optim.Adam(opt_list,
-                                  lr=lr, betas=(0.5, 0.9))
-        return [opt_ae], []
-
+        opt_ae = torch.optim.Adam(opt_list, lr=lr, betas=(0.5, 0.9))
+        opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(), lr=lr, betas=(0.5,0.9))
+        return [opt_ae, opt_disc], []
+    
+    def get_last_layer(self):
+        return self.decoder[self.num_stages-1].conv_out.weight
+        weight = []
+        for i in self.num_stages:
+            weight.append(self.decoder[i].conv_out.weight)
+        return weight
+    
     def log_images(self, batch, **kwargs):
         log = dict()
         x = self.get_input(batch, self.image_key)
