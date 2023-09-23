@@ -4,7 +4,8 @@ import pytorch_lightning as pl
 
 from main import instantiate_from_config
 
-from taming.modules.diffusionmodules.model import Encoder, Decoder
+from taming.modules.diffusionmodules.model import Encoder, Encoder2
+from taming.modules.diffusionmodules.model import Decoder
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 
 import cv2
@@ -36,25 +37,29 @@ class HierarchicalVQModel(pl.LightningModule):
 
         num_latent_layers = ddconfig["num_latent_layers"]
         n_res_block = ddconfig["num_res_blocks"]
+        ch_mult = ddconfig["ch_mult"]
         n_res_channel = ddconfig["residual_units"]
         in_channel = ddconfig["in_channels"]
         channel = ddconfig["ch"]
         
         # Encoder
         self.encoder = nn.ModuleList()
-        self.quant_conv = nn.ModuleList()
         self.quantize = nn.ModuleList()
         self.decoder = nn.ModuleList()
         self.num_stages = num_stages
 
-        self.encoder.append(Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4))
+        self.quant_conv = nn.ModuleList()
+        self.post_quant_conv = nn.ModuleList()
+        self.encoder.append(Encoder(**ddconfig))
 
         for i in range(self.num_stages):
             if i > 0:
-                self.encoder.append(Encoder(channel, channel, n_res_block, n_res_channel, stride=2))
-            self.quant_conv.append(torch.nn.Conv2d(channel, embed_dim, 1))
-            self.quantize.append(VectorQuantizer(embed_dim, n_embed[i]))
-            self.decoder.append(Decoder(embed_dim, in_channel, channel, n_res_block, n_res_channel, stride=4))
+                self.encoder.append(Encoder2(channel*n_res_block, channel*n_res_block, n_res_block, n_res_channel, stride=2))
+            self.quant_conv.append(torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1))
+            self.quantize.append(VectorQuantizer(n_embed[i], embed_dim, beta=0.25,
+                                            remap=remap, sane_index_shape=sane_index_shape))
+            self.decoder.append(Decoder(**ddconfig))
+            self.post_quant_conv.append(torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1))
 
         self.loss = instantiate_from_config(lossconfig)        
         # self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
@@ -114,7 +119,8 @@ class HierarchicalVQModel(pl.LightningModule):
         dec = []
         for i in range(self.num_stages):
             j = (self.num_stages-1) - i
-            dec.append(self.decoder[j](quant[j]))
+            _quant = self.post_quant_conv[j](quant[j])
+            dec.append(self.decoder[j](_quant))
 
             if i > 0:
                 xrec = pyrUp(xrec) + dec[i]
