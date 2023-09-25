@@ -355,7 +355,7 @@ class Model(nn.Module):
         h = self.conv_out(h)
         return h
 
-class Encoder(nn.Module):
+class Encoder2(nn.Module):
     def __init__(self, in_channel, channel, n_res_block, n_res_channel, stride):      
         super().__init__()
         
@@ -386,7 +386,7 @@ class Encoder(nn.Module):
         return self.blocks(input)
 
 
-class Encoder2(nn.Module):
+class Encoder(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, double_z=True, **ignore_kwargs):
@@ -479,9 +479,7 @@ class Encoder2(nn.Module):
         h = self.conv_out(h)
         return h
 
-
-
-class Decoder(nn.Module):
+class Decoder2(nn.Module):
     def __init__(
         self, in_channel, out_channel, channel, n_res_block, n_res_channel, stride
     ):
@@ -515,7 +513,7 @@ class Decoder(nn.Module):
     def forward(self, input):
         return self.blocks(input)
 
-class Decoder2(nn.Module):
+class Decoder(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, give_pre_end=False, **ignorekwargs):

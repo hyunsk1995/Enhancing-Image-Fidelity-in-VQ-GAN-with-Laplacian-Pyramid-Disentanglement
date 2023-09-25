@@ -4,7 +4,7 @@ import pytorch_lightning as pl
 
 from main import instantiate_from_config
 
-from taming.modules.diffusionmodules.model import Encoder, Decoder
+from taming.modules.diffusionmodules.model import Encoder, Encoder2, Decoder, Decoder2
 from taming.modules.vqvae.quantize import VectorQuantizer2 as VectorQuantizer
 from taming.modules.vqvae.quantize import GumbelQuantize
 from taming.modules.vqvae.quantize import EMAVectorQuantizer
@@ -32,33 +32,28 @@ class HierarchicalVQModel(pl.LightningModule):
         in_channel = ddconfig["in_channels"]
         channel = ddconfig["ch"]
 
-        self.encoder_b = Encoder(in_channel, channel, n_res_block, n_res_channel, stride=4)
-        self.encoder_t = Encoder(channel, channel, n_res_block, n_res_channel, stride=2)
+        self.encoder_b = Encoder(**ddconfig)
+        self.encoder_t = Encoder2(channel*n_res_block, channel*n_res_block, n_res_block, n_res_channel, stride=2)
 
-        self.quant_conv_t = torch.nn.Conv2d(channel, embed_dim, 1)
-        self.quantize_t = VectorQuantizer(embed_dim, n_embed[1])
-
-        self.decoder_t = Decoder(
+        self.quant_conv_t = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
+        self.quantize_t = VectorQuantizer(n_embed[1], embed_dim, beta=0.25,
+                                        remap=remap, sane_index_shape=sane_index_shape)
+        
+        self.decoder_t = Decoder2(
             embed_dim, embed_dim, channel, n_res_block, n_res_channel, stride=2
         )
 
-        self.quant_conv_b = torch.nn.Conv2d(embed_dim + channel, embed_dim, 1)
-        self.quantize_b = VectorQuantizer(embed_dim, n_embed[0])
+        self.quant_conv_b = torch.nn.Conv2d(ddconfig["z_channels"]+embed_dim, embed_dim, 1)
+        self.quantize_b = VectorQuantizer(n_embed[0], embed_dim, beta=0.25,
+                                        remap=remap, sane_index_shape=sane_index_shape)
         self.upsample_t = torch.nn.ConvTranspose2d(
             embed_dim, embed_dim, 4, stride=2, padding=1
         )
 
-        self.decoder = Decoder(
-            embed_dim + embed_dim,
-            in_channel,
-            channel,
-            n_res_block,
-            n_res_channel,
-            stride=4,
-        )
+        self.decoder = Decoder(**ddconfig)
 
         self.loss = instantiate_from_config(lossconfig)        
-        # self.post_quant_conv = torch.nn.Conv2d(embed_dim, ddconfig["z_channels"], 1)
+        self.post_quant_conv = torch.nn.Conv2d(embed_dim+embed_dim, ddconfig["z_channels"], 1)
         
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
@@ -83,10 +78,10 @@ class HierarchicalVQModel(pl.LightningModule):
         print(f"Restored from {path}")
 
     def forward(self, input):
-        quant_t, quant_b, diff, _, _ = self.encode(input)
+        quant_t, quant_b, [diff_t, diff_b], _, _ = self.encode(input)
         dec = self.decode(quant_t, quant_b)
 
-        return dec, diff
+        return dec, [diff_t, diff_b]
 
     def encode(self, input):
         enc_b = self.encoder_b(input)
@@ -105,7 +100,7 @@ class HierarchicalVQModel(pl.LightningModule):
         quant_b = quant_b.permute(0, 3, 1, 2)
         diff_b = diff_b.unsqueeze(0)
 
-        return quant_t, quant_b, diff_t + diff_b, id_t, id_b
+        return quant_t, quant_b, [diff_t, diff_b], id_t, id_b
     
     # Seperation of encoding used in transformer
     def encode_top(self, input):
@@ -141,6 +136,7 @@ class HierarchicalVQModel(pl.LightningModule):
     def decode(self, quant_t, quant_b):
         upsample_t = self.upsample_t(quant_t)
         quant = torch.cat([upsample_t, quant_b], 1)
+        quant = self.post_quant_conv(quant)
         dec = self.decoder(quant)
 
         return dec
@@ -162,30 +158,44 @@ class HierarchicalVQModel(pl.LightningModule):
         x = x.permute(0, 3, 1, 2).to(memory_format=torch.contiguous_format)
         return x.float()
 
-    def training_step(self, batch, batch_idx):
+    def training_step(self, batch, batch_idx, optimizer_idx):
         x = self.get_input(batch, self.image_key)
         xrec, qloss = self(x)
 
-        # autoencode
-        aeloss, log_dict_ae = self.loss(qloss, x, xrec, split="train")
+        if optimizer_idx == 0:
+            # autoencode
+            aeloss, log_dict_ae = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
+                                            last_layer=self.get_last_layer(), split="train")
 
-        self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
-        self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
-        return aeloss
+            self.log("train/aeloss", aeloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_ae, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            return aeloss
+
+        if optimizer_idx == 1:
+            # discriminator
+            discloss, log_dict_disc = self.loss(qloss, x, xrec, optimizer_idx, self.global_step,
+                                            last_layer=self.get_last_layer(), split="train")
+            self.log("train/discloss", discloss, prog_bar=True, logger=True, on_step=True, on_epoch=True)
+            self.log_dict(log_dict_disc, prog_bar=False, logger=True, on_step=True, on_epoch=True)
+            return discloss
 
     def validation_step(self, batch, batch_idx):
         x = self.get_input(batch, self.image_key)
         xrec, qloss = self(x)
-        aeloss, log_dict_ae = self.loss(qloss, x, xrec, split="val")
+        aeloss, log_dict_ae = self.loss(qloss, x, xrec, 0, self.global_step,
+                                            last_layer=self.get_last_layer(), split="val")
 
+        discloss, log_dict_disc = self.loss(qloss, x, xrec, 1, self.global_step,
+                                            last_layer=self.get_last_layer(), split="val")
         rec_loss = log_dict_ae["val/rec_loss"]
         self.log("val/rec_loss", rec_loss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
         self.log("val/aeloss", aeloss,
                    prog_bar=True, logger=True, on_step=True, on_epoch=True, sync_dist=True)
         self.log_dict(log_dict_ae)
+        self.log_dict(log_dict_disc)
         return self.log_dict
-
+    
     def configure_optimizers(self):
         lr = self.learning_rate
         opt_ae = torch.optim.Adam(list(self.encoder_t.parameters())+
@@ -195,10 +205,13 @@ class HierarchicalVQModel(pl.LightningModule):
                                   list(self.quantize_t.parameters())+
                                   list(self.quantize_b.parameters())+
                                   list(self.quant_conv_t.parameters())+
-                                  list(self.quant_conv_b.parameters()),
-                                #   list(self.post_quant_conv.parameters()),
+                                  list(self.quant_conv_b.parameters())+
+                                  list(self.post_quant_conv.parameters()),
                                   lr=lr, betas=(0.5, 0.9))
         return [opt_ae], []
+
+    def get_last_layer(self):
+        return self.decoder.conv_out.weight
 
     def log_images(self, batch, **kwargs):
         log = dict()
