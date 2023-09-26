@@ -114,6 +114,7 @@ def nondefault_trainer_args(opt):
 
 
 def instantiate_from_config(config):
+    # print(config)
     if not "target" in config:
         raise KeyError("Expected key `target` to instantiate.")
     return get_obj_from_str(config["target"])(**config.get("params", dict()))
@@ -252,7 +253,6 @@ class ImageLogger(Callback):
     @rank_zero_only
     def log_local(self, save_dir, split, images,
                   global_step, current_epoch, batch_idx):
-        print("save_images")
         root = os.path.join(save_dir, "images", split)
         for k in images:
             grid = torchvision.utils.make_grid(images[k], nrow=4)
@@ -371,6 +371,7 @@ if __name__ == "__main__":
     parser = Trainer.add_argparse_args(parser)
 
     opt, unknown = parser.parse_known_args()
+    print(opt)
     if opt.name and opt.resume:
         raise ValueError(
             "-n/--name and -r/--resume cannot be specified both."
@@ -501,14 +502,14 @@ if __name__ == "__main__":
                     "lightning_config": lightning_config,
                 }
             },
-            # "image_logger": {
-            #     "target": "main.ImageLogger",
-            #     "params": {
-            #         "batch_frequency": 750,
-            #         "max_images": 4,
-            #         "clamp": True
-            #     }
-            # },
+            "image_logger": {
+                "target": "main.ImageLogger",
+                "params": {
+                    "batch_frequency": 750,
+                    "max_images": 4,
+                    "clamp": True
+                }
+            },
             "learning_rate_logger": {
                 "target": "main.LearningRateMonitor",
                 "params": {

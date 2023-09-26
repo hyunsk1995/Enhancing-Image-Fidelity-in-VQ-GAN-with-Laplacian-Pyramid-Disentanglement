@@ -208,7 +208,8 @@ class HierarchicalVQModel(pl.LightningModule):
                                   list(self.quant_conv_b.parameters())+
                                   list(self.post_quant_conv.parameters()),
                                   lr=lr, betas=(0.5, 0.9))
-        return [opt_ae], []
+        opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(), lr=lr, betas=(0.5,0.9))
+        return [opt_ae, opt_disc], []
 
     def get_last_layer(self):
         return self.decoder.conv_out.weight
