@@ -100,10 +100,8 @@ class HierarchicalVQModel(pl.LightningModule):
 
         for i in range(self.num_stages):
             _enc = self.encoder[i](prev)
-            _quant = self.quant_conv[i](_enc).permute(0, 2, 3, 1)
+            _quant = self.quant_conv[i](_enc)
             _quant, _diff, _id = self.quantize[i](_quant)
-            _quant = _quant.permute(0, 3, 1, 2)
-            _diff = _diff.unsqueeze(0)
 
             enc.append(_enc)
             quant.append(_quant)
@@ -225,7 +223,7 @@ class HierarchicalVQModel(pl.LightningModule):
         return x
     
     def disentangle(self, img, num_stage):
-        assert img[0].shape == (3, 256, 256)    
+        # assert img[0].shape == (3, 256, 256)    
         img = gaussianBlur(img)
         disentangled = []
         prev = img

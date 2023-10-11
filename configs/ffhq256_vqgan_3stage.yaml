@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 1.5e-6
+  base_learning_rate: 4.5e-6
   target: taming.models.vqgan2.HierarchicalVQModel
   params:
     embed_dim: 64
@@ -19,14 +19,18 @@ model:
       dropout: 0.0
 
     lossconfig:
-      target: taming.modules.losses.vqvae2loss.VQVAE2Loss
+      target: taming.modules.losses.vqvae2loss.VQLPIPSWithDiscriminator
       params:
         codebook_weight: [0.25, 0.25, 0.25]
+        disc_conditional: False
+        disc_in_channels: 3
+        disc_start: 30001
+        disc_weight: 0.8
 
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 160
+    batch_size: 6
     num_workers: 8
     train:
       target: taming.data.faceshq.FacesHQTrain

@@ -47,7 +47,7 @@ def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperat
     return idx, feature
 
 @torch.no_grad()
-def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
+def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
     if len(dsets.datasets) > 1:
         split = sorted(dsets.datasets.keys())[0]
         dset = dsets.datasets[split]
@@ -59,7 +59,6 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
         example = default_collate([dset[i] for i in indices])
 
         x = model.get_input("image", example).to(model.device)
-        print(x.shape)
         for i in range(x.shape[0]):
             save_image(x[i], os.path.join(outdir, "originals",
                                           "{:06}.png".format(indices[i])))
@@ -70,15 +69,17 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
         scale_factor = 1.0
 
         num_stages = model.num_stages
+        quant_z, info = model.encode_to_z(x)
 
         prev = None
         for i in range(num_stages):
             hier = (num_stages-1) - i
-            quant_z, z_indices = model.encode_to_z(x, hier)
+            
             _, c_indices = model.encode_to_c(c)
 
-            qshape = quant_z.shape
-            print(qshape)
+            z_indices = info[hier][-1].view(quant_z[hier].shape[0], -1)
+
+            qshape = quant_z[hier].shape
 
             # if cond_key == "segmentation":
             #     # get image from segmentation mask
@@ -90,7 +91,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
 
             idx = z_indices
 
-            half_sample = True
+            half_sample = False
             if half_sample:
                 start = idx.shape[1]//2
                 

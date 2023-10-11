@@ -7,6 +7,11 @@ import torch.nn as nn
 from main import instantiate_from_config
 from taming.modules.util import SOSProvider
 
+from kornia.geometry.transform.pyramid import PyrUp, PyrDown
+
+pyrUp = PyrUp()
+pyrDown = PyrDown()
+
 
 def disabled_train(self, mode=True):
     """Overwrite model.train with this function to make sure train/eval mode
@@ -27,7 +32,7 @@ class MultiStageTransformer(pl.LightningModule):
                  downsample_cond_size=-1,
                  pkeep=1.0,
                  sos_token=0,
-                 unconditional=False,
+                 unconditional=True,
                  num_stages=2,
                  ):
         super().__init__()
@@ -37,7 +42,7 @@ class MultiStageTransformer(pl.LightningModule):
         self.cond_stage_key = cond_stage_key
         self.num_stages = num_stages
         self.init_first_stage_from_ckpt(first_stage_config)
-        self.init_cond_stage_from_ckpt("__is_unconditional__") #cond_stage_config)
+        self.init_cond_stage_from_ckpt(cond_stage_config)
         if permuter_config is None:
             permuter_config = {"target": "taming.modules.transformer.permuter.Identity"}
         self.permuter = instantiate_from_config(config=permuter_config)
@@ -88,10 +93,15 @@ class MultiStageTransformer(pl.LightningModule):
         prev = None
         logits = []
         targets = []
+
+        quant_z, info = self.encode_to_z(x)
         for i in range(self.num_stages):
             hier = (self.num_stages-1) -i
-            _, z_indices = self.encode_to_z(x, hier)
             _, c_indices = self.encode_to_c(c)
+
+            z_indices = info[hier][2].view(quant_z[hier].shape[0], -1)
+            z_indices = self.permuter(z_indices)
+
 
             if self.training and self.pkeep < 1.0:
                 mask = torch.bernoulli(self.pkeep*torch.ones(z_indices.shape,
@@ -180,20 +190,9 @@ class MultiStageTransformer(pl.LightningModule):
         return x, feature
 
     @torch.no_grad()
-    def encode_to_z(self, x, hier):
-        prev = x
-        vqvae = self.first_stage_model
-        for i in range(hier+1):
-            enc = vqvae.encoder[i](prev)
-            prev = enc
-        quant = vqvae.quant_conv[hier](enc).permute(0, 2, 3, 1)
-        quant, diff, id = vqvae.quantize[hier](quant)
-        quant = quant.permute(0, 3, 1, 2)
-        diff = diff.unsqueeze(0)
-
-        indices = id.view(quant.shape[0], -1)
-        indices = self.permuter(indices)
-        return quant, indices
+    def encode_to_z(self, x):
+        quant_z, _, info = self.first_stage_model.encode(x)
+        return quant_z, info
 
     @torch.no_grad()
     def encode_to_c(self, c):
@@ -210,6 +209,8 @@ class MultiStageTransformer(pl.LightningModule):
         bhwc = (zshape[0],zshape[2],zshape[3],zshape[1])
         quant_z = self.first_stage_model.quantize[hier].get_codebook_entry(
                 index.reshape(-1), shape=bhwc)
+
+        quant_z = self.first_stage_model.post_quant_conv[hier](quant_z)
         x = self.first_stage_model.decoder[hier](quant_z)
         return x
 
@@ -226,13 +227,20 @@ class MultiStageTransformer(pl.LightningModule):
         c = c.to(device=self.device)
 
         prev = None
+        # quant_z, info = self.encode_to_z(x)
+        quant_z, _, info = self.first_stage_model.encode(x)
+        
         for i in range(self.num_stages):
             hier = (self.num_stages-1) - i
-            quant_z, z_indices = self.encode_to_z(x, hier)
             quant_c, c_indices = self.encode_to_c(c)
+
+            z_indices = info[hier][-1].view(quant_z[hier].shape[0], -1)
+            z_indices = self.permuter(z_indices)
 
             # create a "half"" sample
             z_start_indices = z_indices[:,:z_indices.shape[1]//2]
+            # z_start_indices = z_indices[:, :0]
+            
             index_sample, feature = self.sample(z_start_indices, c_indices,
                                        steps=z_indices.shape[1]-z_start_indices.shape[1],
                                        prev=prev,
@@ -241,9 +249,15 @@ class MultiStageTransformer(pl.LightningModule):
                                        sample=True,
                                        top_k=top_k if top_k is not None else 100,
                                        callback=callback if callback is not None else lambda k: None)
-            x_sample = self.decode_to_img(index_sample, quant_z.shape, hier)
+            x_sample = self.decode_to_img(index_sample, quant_z[hier].shape, hier)
 
-            x_rec = self.decode_to_img(z_indices, quant_z.shape, hier)
+            x_rec = self.decode_to_img(z_indices, quant_z[hier].shape, hier)
+
+            if i > 0:
+                full_rec = pyrUp(full_rec) + x_rec
+            else:
+                full_rec = x_rec
+
 
             log["recon_stage"+str(i+1)] = x_rec
             log["sample_stage"+str(i+1)] = x_sample
@@ -252,6 +266,7 @@ class MultiStageTransformer(pl.LightningModule):
         # log["samples_half"] = x_sample
         # log["samples_nopix"] = x_sample_nopix
         # log["samples_det"] = x_sample_det
+        log["recon_full"] = full_rec
         log["inputs"] = x
 
         return log
