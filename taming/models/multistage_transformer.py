@@ -90,18 +90,18 @@ class MultiStageTransformer(pl.LightningModule):
 
     def forward(self, x, c):
         # one step to produce the logits
-        prev = None
+        p_indices = None
         logits = []
         targets = []
 
         quant_z, info = self.encode_to_z(x)
+
         for i in range(self.num_stages):
             hier = (self.num_stages-1) -i
             _, c_indices = self.encode_to_c(c)
 
             z_indices = info[hier][2].view(quant_z[hier].shape[0], -1)
             z_indices = self.permuter(z_indices)
-
 
             if self.training and self.pkeep < 1.0:
                 mask = torch.bernoulli(self.pkeep*torch.ones(z_indices.shape,
@@ -112,18 +112,23 @@ class MultiStageTransformer(pl.LightningModule):
             else:
                 a_indices = z_indices
 
+            if p_indices is not None:
+                a_indices = torch.cat((p_indices, a_indices), dim=1)
             cz_indices = torch.cat((c_indices, a_indices), dim=1)
 
             # target includes all sequence elements (no need to handle first one
             # differently because we are conditioning)
             target = z_indices
             # make the prediction
-            logit, _, feature = self.transformer[hier](cz_indices[:, :-1], prev)
+            logit, _, feature = self.transformer[hier](cz_indices[:, :-1])
+
+            if p_indices is not None:
+                logit = logit[:,p_indices.shape[1]:]
             # cut off conditioning outputs - output i corresponds to p(z_i | z_{<i}, c)
             logit = logit[:, c_indices.shape[1]-1:]
             logits.append(logit)
             targets.append(target)
-            prev = feature
+            p_indices = z_indices
 
         return logits, targets
 
@@ -136,6 +141,8 @@ class MultiStageTransformer(pl.LightningModule):
     @torch.no_grad()
     def sample(self, x, c, steps, hier, prev, temperature=1.0, sample=False, top_k=None,
                callback=lambda k: None):
+        if prev is not None:
+            x = torch.cat((prev, x),dim=1)
         x = torch.cat((c,x),dim=1)
         block_size = self.transformer[hier].get_block_size()
         assert not self.transformer.training
@@ -146,7 +153,7 @@ class MultiStageTransformer(pl.LightningModule):
             #noise = torch.randint(self.transformer.config.vocab_size, noise_shape).to(x)
             noise = c.clone()[:,x.shape[1]-c.shape[1]:-1]
             x = torch.cat((x,noise),dim=1)
-            logits, _, feature = self.transformer[hier](x, prev)
+            logits, _, feature = self.transformer[hier](x)
             # take all logits for now and scale by temp
             logits = logits / temperature
             # optionally crop probabilities to only the top k options
@@ -164,13 +171,15 @@ class MultiStageTransformer(pl.LightningModule):
             else:
                 _, ix = torch.topk(probs, k=1, dim=-1)
             # cut off conditioning
-            x = ix[:, c.shape[1]-1:]
+            if prev is not None:
+                x = ix[:, prev.shape[1]:]
+            x = x[:, c.shape[1]-1:]
         else:
             for k in range(steps):
                 callback(k)
                 assert x.size(1) <= block_size # make sure model can see conditioning
                 x_cond = x if x.size(1) <= block_size else x[:, -block_size:]  # crop context if needed
-                logits, _, feature = self.transformer[hier](x_cond, prev)
+                logits, _, feature = self.transformer[hier](x_cond)
                 # pluck the logits at the final step and scale by temperature
                 logits = logits[:, -1, :] / temperature
                 # optionally crop probabilities to only the top k options
@@ -186,6 +195,8 @@ class MultiStageTransformer(pl.LightningModule):
                 # append to the sequence and continue
                 x = torch.cat((x, ix), dim=1)
             # cut off conditioning
+            if prev is not None:
+                x = x[:, prev.shape[1]:]
             x = x[:, c.shape[1]:]
         return x, feature
 
@@ -226,9 +237,9 @@ class MultiStageTransformer(pl.LightningModule):
         x = x.to(device=self.device)
         c = c.to(device=self.device)
 
-        prev = None
         # quant_z, info = self.encode_to_z(x)
         quant_z, _, info = self.first_stage_model.encode(x)
+        p_indices = None
         
         for i in range(self.num_stages):
             hier = (self.num_stages-1) - i
@@ -243,7 +254,7 @@ class MultiStageTransformer(pl.LightningModule):
             
             index_sample, feature = self.sample(z_start_indices, c_indices,
                                        steps=z_indices.shape[1]-z_start_indices.shape[1],
-                                       prev=prev,
+                                       prev = p_indices,
                                        hier=hier,
                                        temperature=temperature if temperature is not None else 1.0,
                                        sample=True,
@@ -261,7 +272,7 @@ class MultiStageTransformer(pl.LightningModule):
 
             log["recon_stage"+str(i+1)] = x_rec
             log["sample_stage"+str(i+1)] = x_sample
-            prev = feature
+            p_indices = z_indices
 
         # log["samples_half"] = x_sample
         # log["samples_nopix"] = x_sample_nopix

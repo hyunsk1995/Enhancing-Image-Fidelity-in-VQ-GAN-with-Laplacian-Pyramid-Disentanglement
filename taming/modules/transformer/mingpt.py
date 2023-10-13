@@ -204,9 +204,9 @@ class GPT(nn.Module):
         self.drop = nn.Dropout(config.embd_pdrop)
         # transformer
         self.blocks_MSA = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
-        self.blocks_MCA = nn.ModuleList()
-        for _ in range(config.n_layer):
-            self.blocks_MCA.append(BlockMCA(config))
+        # self.blocks_MCA = nn.ModuleList()
+        # for _ in range(config.n_layer):
+        #     self.blocks_MCA.append(BlockMCA(config))
         
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
@@ -228,7 +228,7 @@ class GPT(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, idx, prev, embeddings=None, targets=None):
+    def forward(self, idx, embeddings=None, targets=None):
         # forward the GPT model
         token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
 
@@ -240,12 +240,8 @@ class GPT(nn.Module):
         assert t <= self.block_size, "Cannot forward, model block size is exhausted."
         position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
         x = self.drop(token_embeddings + position_embeddings)
-        if prev is None:
-            feature = self.blocks_MSA(x)
-        else:
-            feature = x
-            for module in self.blocks_MCA:
-                feature = module(feature, prev)
+    
+        feature = self.blocks_MSA(x)
         x = self.ln_f(feature)
         logits = self.head(x)
 

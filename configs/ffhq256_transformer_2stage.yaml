@@ -7,7 +7,7 @@ model:
     transformer_config:
       - target: taming.modules.transformer.mingpt.GPT
         params:
-          vocab_size: 256
+          vocab_size: 512
           block_size: 320
           n_layer: 8
           n_head: 8
@@ -56,7 +56,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 10
+    batch_size: 4
     num_workers: 8
     train:
       target: taming.data.faceshq.FacesHQ256Train
