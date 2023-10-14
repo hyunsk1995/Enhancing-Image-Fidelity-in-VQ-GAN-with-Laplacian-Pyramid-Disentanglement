@@ -7,7 +7,9 @@ from main import instantiate_from_config, DataModuleFromConfig
 from torch.utils.data import DataLoader
 from torch.utils.data.dataloader import default_collate
 from tqdm import trange
+from kornia.geometry.transform.pyramid import PyrUp
 
+pyrUp = PyrUp()
 
 def save_image(x, path):
     c,h,w = x.shape
@@ -15,9 +17,37 @@ def save_image(x, path):
     x = ((x.detach().cpu().numpy().transpose(1,2,0)+1.0)*127.5).clip(0,255).astype(np.uint8)
     Image.fromarray(x).save(path)
 
+# logits : (B, hw, vocab_size)
+def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
+    sample = True
+
+    for i in range(start_i, qshape[2]):
+        for j in range(start_j, qshape[3]):
+            # print("i, j:", i, j)
+            cx = torch.cat((cidx, idx), dim=1)
+            logits, _ = model.transformer(cx[:,:-1]) # (B, block_size, vocab_size)
+            # print(logits.shape)
+            logits = logits[:, -qshape[2]*qshape[3]:, :]
+            logits = logits[:, i*qshape[2]+j, :]
+            logits /= temperature
+
+            if top_k is not None:
+                logits = model.top_k_logits(logits, top_k)
+            probs = torch.nn.functional.softmax(logits, dim=-1)
+
+            if sample:
+                ix = torch.multinomial(probs, num_samples=1)
+            else:
+                _, ix = torch.topk(probs, k=1, dim=-1)
+            
+            idx[:,i*qshape[2]+j] = ix.squeeze()
+        
+    idx = idx.reshape(qshape[0], qshape[2], qshape[3])
+
+    return idx
 
 @torch.no_grad()
-def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
+def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
     if len(dsets.datasets) > 1:
         split = sorted(dsets.datasets.keys())[0]
         dset = dsets.datasets[split]
@@ -34,90 +64,51 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=1):
                                           "{:06}.png".format(indices[i])))
 
         cond_key = model.cond_stage_key
+        print(torch.cuda.current_device())
         c = model.get_input(cond_key, example).to(model.device)
 
         scale_factor = 1.0
+
         quant_z, z_indices = model.encode_to_z(x)
-        quant_c, c_indices = model.encode_to_c(c)
+        _, c_indices = model.encode_to_c(c)
 
-        cshape = quant_z.shape
+        qshape = quant_z.shape
 
-        xrec = model.first_stage_model.decode(quant_z)
-        for i in range(xrec.shape[0]):
-            save_image(xrec[i], os.path.join(outdir, "reconstructions",
-                                             "{:06}.png".format(indices[i])))
-
-        if cond_key == "segmentation":
-            # get image from segmentation mask
-            num_classes = c.shape[1]
-            c = torch.argmax(c, dim=1, keepdim=True)
-            c = torch.nn.functional.one_hot(c, num_classes=num_classes)
-            c = c.squeeze(1).permute(0, 3, 1, 2).float()
-            c = model.cond_stage_model.to_rgb(c)
+        # if cond_key == "segmentation":
+        #     # get image from segmentation mask
+        #     num_classes = c.shape[1]
+        #     c = torch.argmax(c, dim=1, keepdim=True)
+        #     c = torch.nn.functional.one_hot(c, num_classes=num_classes)
+        #     c = c.squeeze(1).permute(0, 3, 1, 2).float()
+        #     c = model.cond_stage_model.to_rgb(c)
 
         idx = z_indices
 
         half_sample = False
         if half_sample:
             start = idx.shape[1]//2
+            
         else:
             start = 0
 
         idx[:,start:] = 0
-        idx = idx.reshape(cshape[0],cshape[2],cshape[3])
-        start_i = start//cshape[3]
-        start_j = start %cshape[3]
+        # t_idx = t_idx.reshape(qshape_t[0],qshape_t[2],qshape_t[3])
+        start_i = start//qshape[3]
+        start_j = start %qshape[3]
 
-        cidx = c_indices
-        cidx = cidx.reshape(quant_c.shape[0],quant_c.shape[2],quant_c.shape[3])
+        idx = AR_modeling(model, idx, c_indices, start_i, start_j, qshape, temperature, top_k)
+        # print(idx.shape)
+        x_sample = model.decode_to_img(idx, qshape)
 
-        sample = True
+        # xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
 
-        for i in range(start_i,cshape[2]-0):
-            if i <= 8:
-                local_i = i
-            elif cshape[2]-i < 8:
-                local_i = 16-(cshape[2]-i)
-            else:
-                local_i = 8
-            for j in range(start_j,cshape[3]-0):
-                if j <= 8:
-                    local_j = j
-                elif cshape[3]-j < 8:
-                    local_j = 16-(cshape[3]-j)
-                else:
-                    local_j = 8
+        full_recon, _ = model.first_stage_model(x)
 
-                i_start = i-local_i
-                i_end = i_start+16
-                j_start = j-local_j
-                j_end = j_start+16
-                patch = idx[:,i_start:i_end,j_start:j_end]
-                patch = patch.reshape(patch.shape[0],-1)
-                cpatch = cidx[:, i_start:i_end, j_start:j_end]
-                cpatch = cpatch.reshape(cpatch.shape[0], -1)
-                patch = torch.cat((cpatch, patch), dim=1)
-                logits,_ = model.transformer(patch[:,:-1])
-                logits = logits[:, -256:, :]
-                logits = logits.reshape(cshape[0],16,16,-1)
-                logits = logits[:,local_i,local_j,:]
-
-                logits = logits/temperature
-
-                if top_k is not None:
-                    logits = model.top_k_logits(logits, top_k)
-                # apply softmax to convert to probabilities
-                probs = torch.nn.functional.softmax(logits, dim=-1)
-                # sample from the distribution or take the most likely
-                if sample:
-                    ix = torch.multinomial(probs, num_samples=1)
-                else:
-                    _, ix = torch.topk(probs, k=1, dim=-1)
-                idx[:,i,j] = ix
-
-        xsample = model.decode_to_img(idx[:,:cshape[2],:cshape[3]], cshape)
-        for i in range(xsample.shape[0]):
-            save_image(xsample[i], os.path.join(outdir, "samples",
+        for i in range(full_recon.shape[0]):
+            save_image(full_recon[i], os.path.join(outdir, "reconstructions",
+                                                "{:06}.png".format(indices[i])))
+        for i in range(x_sample.shape[0]):
+            save_image(x_sample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))
 
 
@@ -200,6 +191,7 @@ def load_model_from_config(config, sd, gpu=True, eval_mode=True):
         print(f"Missing Keys in State Dict: {missing}")
         print(f"Unexpected Keys in State Dict: {unexpected}")
     if gpu:
+        print("available gpus:", torch.cuda.device_count())
         model.cuda()
     if eval_mode:
         model.eval()
@@ -212,7 +204,6 @@ def get_data(config):
     data.prepare_data()
     data.setup()
     return data
-
 
 def load_model_and_dset(config, ckpt, gpu, eval_mode):
     # get data
@@ -231,13 +222,13 @@ def load_model_and_dset(config, ckpt, gpu, eval_mode):
                                    eval_mode=eval_mode)["model"]
     return dsets, model, global_step
 
-
 if __name__ == "__main__":
     sys.path.append(os.getcwd())
 
     parser = get_parser()
 
     opt, unknown = parser.parse_known_args()
+    # os.environ['CUDA_VISIBLE_DEVICES'] = po
 
     ckpt = None
     if opt.resume:
@@ -272,14 +263,16 @@ if __name__ == "__main__":
             if hasattr(config, "data"): del config["data"]
     config = OmegaConf.merge(*configs, cli)
 
-    print(ckpt)
     gpu = True
     eval_mode = True
     show_config = False
     if show_config:
         print(OmegaConf.to_container(config))
 
+    print(torch.cuda.current_device())
     dsets, model, global_step = load_model_and_dset(config, ckpt, gpu, eval_mode)
+
+    print(torch.cuda.current_device())
     print(f"Global step: {global_step}")
 
     outdir = os.path.join(opt.outdir, "{:06}_{}_{}".format(global_step,

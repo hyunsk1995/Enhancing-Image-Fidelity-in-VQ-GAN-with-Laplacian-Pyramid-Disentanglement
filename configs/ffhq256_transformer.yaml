@@ -6,15 +6,15 @@ model:
     transformer_config:
       target: taming.modules.transformer.mingpt.GPT
       params:
-        vocab_size: 1024
-        block_size: 512
+        vocab_size: 512
+        block_size: 256
         n_layer: 24
         n_head: 16
-        n_embd: 1024
+        n_embd: 512
     first_stage_config:
       target: taming.models.vqgan.VQModel
       params:
-        ckpt_path: logs/2023-07-11T14-29-18_faceshq_vqgan/testtube/version_0/checkpoints/epoch=19.ckpt
+        ckpt_path: logs/2023-09-25T05-40-28_ffhq256_vqgan/testtube/version_1/checkpoints/epoch=39.ckpt
         embed_dim: 64
         n_embed: 512
         ddconfig:
@@ -45,17 +45,13 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 2
+    batch_size: 30
     num_workers: 8
     train:
       target: taming.data.faceshq.FFHQ256Train
       params:
         size: 256
-        # crop_size: 256
-        coord: True
     validation:
       target: taming.data.faceshq.FFHQ256Validation
       params:
         size: 256
-        # crop_size: 256
-        coord: True

@@ -26,7 +26,7 @@ class Net2NetTransformer(pl.LightningModule):
                  downsample_cond_size=-1,
                  pkeep=1.0,
                  sos_token=0,
-                 unconditional=False,
+                 unconditional=True,
                  ):
         super().__init__()
         self.be_unconditional = unconditional
