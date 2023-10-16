@@ -8,16 +8,16 @@ model:
       target: taming.modules.transformer.mingpt.GPT
       params:
         vocab_size: 512
-        block_size: 5375 # 4096 + 256 + 1024
+        block_size: 320
         n_layer: 12
         n_head: 4
         n_embd: 256
     first_stage_config:
       target: taming.models.vqgan2.HierarchicalVQModel
       params:
-        ckpt_path: logs/2023-09-18T13-30-39_ffhq256_vqgan/testtube/version_1/checkpoints/epoch=799.ckpt
+        ckpt_path: logs/2023-10-08T16-04-05_ffhq256_vqgan_vqvae2/testtube/version_0/checkpoints/epoch=39.ckpt
         embed_dim: 64
-        n_embed: 512
+        n_embed: [256, 512]
         ddconfig:
           double_z: false
           z_channels: 256
@@ -48,7 +48,7 @@ model:
 data:
   target: main.DataModuleFromConfig
   params:
-    batch_size: 1
+    batch_size: 30
     num_workers: 8
     train:
       target: taming.data.faceshq.FacesHQTrain

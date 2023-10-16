@@ -21,7 +21,6 @@ def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
 
     for i in range(start_i, qshape[2]):
         for j in range(start_j, qshape[3]):
-            print("i, j:", i, j)
             cx = torch.cat((cidx, idx), dim=1)
             logits, _ = model.transformer(cx[:,:-1]) # (B, block_size, vocab_size)
 
@@ -38,14 +37,14 @@ def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
             else:
                 _, ix = torch.topk(probs, k=1, dim=-1)
             
-            idx[:,i*qshape[2]+j] = ix
+            idx[:,i*qshape[2]+j] = ix.squeeze()
         
     idx = idx.reshape(qshape[0], qshape[2], qshape[3])
 
     return idx
 
 @torch.no_grad()
-def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, batch_size=1):
+def run_conditional(vae_model, top_model, bottom_model, dsets, outdir, top_k, temperature, batch_size=64):
     if len(dsets.datasets) > 1:
         split = sorted(dsets.datasets.keys())[0]
         dset = dsets.datasets[split]
@@ -56,7 +55,7 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         indices = list(range(start_idx, start_idx+batch_size))
         example = default_collate([dset[i] for i in indices])
 
-        x = top_model.get_input("image", example).to(top_model.device)
+        x = vae_model.get_input(example, "image").to(vae_model.device)
         
         for i in range(x.shape[0]):
             save_image(x[i], os.path.join(outdir, "originals",
@@ -66,16 +65,16 @@ def run_conditional(top_model, bottom_model, dsets, outdir, top_k, temperature, 
         c = top_model.get_input(cond_key, example).to(top_model.device)
 
         scale_factor = 1.0
-        quant_zt, zt_indices = top_model.encode_to_z(x)
-        quant_zb, zb_indices = bottom_model.encode_to_z(x)
+        quant_zt, _, zt_indices, _ = top_model.encode_to_z(x)
+        _, quant_zb, _, zb_indices = bottom_model.encode_to_z(x)
         quant_ct, ct_indices = top_model.encode_to_c(c)
         quant_cb, cb_indices = bottom_model.encode_to_c(c)
 
         qshape_t = quant_zt.shape
         qshape_b = quant_zb.shape
-        print(qshape_t, qshape_b)
 
-        xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
+        # xrec = top_model.first_stage_model.decode(quant_zt, quant_zb)
+        xrec, _ = vae_model(x)
         for i in range(xrec.shape[0]):
             save_image(xrec[i], os.path.join(outdir, "reconstructions",
                                              "{:06}.png".format(indices[i])))
@@ -128,6 +127,12 @@ def get_parser():
     #     nargs="?",
     #     help="load from logdir or checkpoint in logdir",
     # )
+    parser.add_argument(
+        "--vae",
+        type=str,
+        nargs="?",
+        help="load from vae checkpoint in logdir",
+    )
     parser.add_argument(
         "--top",
         type=str,
@@ -224,11 +229,18 @@ def get_data(config):
     return data
 
 
-def load_model_and_dset(top_config, bottom_config, top_ckpt, bottom_ckpt, gpu, eval_mode):
+def load_model_and_dset(vae_config, top_config, bottom_config, vae_ckpt, top_ckpt, bottom_ckpt, gpu, eval_mode):
     # get data
     dsets = get_data(top_config)   # calls data.config ...
 
     # now load the specified checkpoint
+    if vae_ckpt:
+        pl_sd_vae = torch.load(vae_ckpt, map_location="cpu")
+        global_step_vae = pl_sd_vae["global_step"]
+    else:
+        pl_sd_vae = {"state_dict": None}
+        global_step_vae = None
+
     if top_ckpt:
         pl_sd_top = torch.load(top_ckpt, map_location="cpu")
         global_step_top = pl_sd_top["global_step"]
@@ -243,6 +255,11 @@ def load_model_and_dset(top_config, bottom_config, top_ckpt, bottom_ckpt, gpu, e
         pl_sd_bottom = {"state_dict": None}
         global_step_bottom = None
 
+    vae_model = load_model_from_config(vae_config.model,
+                                   pl_sd_vae["state_dict"],
+                                   gpu=gpu,
+                                   eval_mode=eval_mode)["model"]
+
     top_model = load_model_from_config(top_config.model,
                                    pl_sd_top["state_dict"],
                                    gpu=gpu,
@@ -251,7 +268,7 @@ def load_model_and_dset(top_config, bottom_config, top_ckpt, bottom_ckpt, gpu, e
                                    pl_sd_bottom["state_dict"],
                                    gpu=gpu,
                                    eval_mode=eval_mode)["model"]
-    return dsets, top_model, bottom_model, global_step_top, global_step_bottom
+    return dsets, vae_model, top_model, bottom_model, global_step_top, global_step_bottom
 
 
 if __name__ == "__main__":
@@ -263,6 +280,27 @@ if __name__ == "__main__":
 
     top_ckpt = None
     bottom_ckpt = None
+    vae_ckpt = None
+
+    if opt.vae:
+        if not os.path.exists(opt.vae):
+            raise ValueError("Cannot find {}".format(opt.vae))
+        if os.path.isfile(opt.vae):
+            paths = opt.vae.split("/")
+            try:
+                idx = len(paths)-paths[::-1].index("logs")+1
+            except ValueError:
+                idx = -2 # take a guess: path/to/logdir/checkpoints/model.ckpt
+            logdir = "/".join(paths[:idx])
+            vae_ckpt = opt.vae
+        else:
+            assert os.path.isdir(opt.vae), opt.vae
+            logdir = opt.vae.rstrip("/")
+            vae_ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
+        print(f"logdir:{logdir}")
+        vae_configs = sorted(glob.glob(os.path.join(logdir, "configs/*-project.yaml")))
+        opt.vae_config = vae_configs+opt.base
+    
     if opt.top:
         if not os.path.exists(opt.top):
             raise ValueError("Cannot find {}".format(opt.top))
@@ -307,6 +345,13 @@ if __name__ == "__main__":
     #     else:
     #         opt.base = [opt.base[-1]]
 
+    vae_configs = [OmegaConf.load(cfg) for cfg in opt.vae_config]
+    cli = OmegaConf.from_dotlist(unknown)
+    if opt.ignore_base_data:
+        for config in vae_configs:
+            if hasattr(config, "data"): del config["data"]
+    vae_config = OmegaConf.merge(*vae_configs, cli)
+
     top_configs = [OmegaConf.load(cfg) for cfg in opt.top_config]
     cli = OmegaConf.from_dotlist(unknown)
     if opt.ignore_base_data:
@@ -321,6 +366,8 @@ if __name__ == "__main__":
             if hasattr(config, "data"): del config["data"]
     bottom_config = OmegaConf.merge(*bottom_configs, cli)
 
+
+
     gpu = True
     eval_mode = True
     show_config = False
@@ -328,10 +375,11 @@ if __name__ == "__main__":
         print(OmegaConf.to_container(top_config))
         print(OmegaConf.to_container(bottom_config))
 
-    dsets, top_model, bottom_model, global_step_top, global_step_bottom = load_model_and_dset(top_config, bottom_config, top_ckpt, bottom_ckpt, gpu, eval_mode)
-    print(f"Global step: {global_step_top}")
+    dsets, vae_model, top_model, bottom_model, global_step_top, global_step_bottom = load_model_and_dset(vae_config, top_config, bottom_config, 
+                                                                                              vae_ckpt, top_ckpt, bottom_ckpt, gpu, eval_mode)
+    print(f"Global step: {global_step_top+global_step_bottom}")
 
-    outdir = os.path.join(opt.outdir, "{:06}_{}_{}".format(global_step_top,
+    outdir = os.path.join(opt.outdir, "{:06}_{}_{}".format(global_step_top+global_step_bottom,
                                                            opt.top_k,
                                                            opt.temperature))
     
@@ -340,4 +388,4 @@ if __name__ == "__main__":
     print("Writing samples to ", outdir)
     for k in ["originals", "reconstructions", "samples"]:
         os.makedirs(os.path.join(outdir, k), exist_ok=True)
-    run_conditional(top_model, bottom_model, dsets, outdir, opt.top_k, opt.temperature)
+    run_conditional(vae_model, top_model, bottom_model, dsets, outdir, opt.top_k, opt.temperature)

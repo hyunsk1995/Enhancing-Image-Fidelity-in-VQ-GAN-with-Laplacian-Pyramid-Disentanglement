@@ -87,18 +87,14 @@ class HierarchicalVQModel(pl.LightningModule):
         enc_b = self.encoder_b(input)
         enc_t = self.encoder_t(enc_b)
 
-        quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
+        quant_t = self.quant_conv_t(enc_t)
         quant_t, diff_t, id_t = self.quantize_t(quant_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        diff_t = diff_t.unsqueeze(0)
 
         dec_t = self.decoder_t(quant_t)
         enc_b = torch.cat([dec_t, enc_b], 1)
 
-        quant_b = self.quant_conv_b(enc_b).permute(0, 2, 3, 1)
+        quant_b = self.quant_conv_b(enc_b)
         quant_b, diff_b, id_b = self.quantize_b(quant_b)
-        quant_b = quant_b.permute(0, 3, 1, 2)
-        diff_b = diff_b.unsqueeze(0)
 
         return quant_t, quant_b, [diff_t, diff_b], id_t, id_b
     
@@ -107,10 +103,8 @@ class HierarchicalVQModel(pl.LightningModule):
         enc_b = self.encoder_b(input)
 
         enc_t = self.encoder_t(enc_b)
-        quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
+        quant_t = self.quant_conv_t(enc_t)
         quant_t, diff_t, id_t = self.quantize_t(quant_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        diff_t = diff_t.unsqueeze(0)
 
         return quant_t, id_t
 
@@ -118,18 +112,14 @@ class HierarchicalVQModel(pl.LightningModule):
         enc_b = self.encoder_b(input)
         enc_t = self.encoder_t(enc_b)
 
-        quant_t = self.quant_conv_t(enc_t).permute(0, 2, 3, 1)
+        quant_t = self.quant_conv_t(enc_t)
         quant_t, diff_t, id_t = self.quantize_t(quant_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        diff_t = diff_t.unsqueeze(0)
 
         dec_t = self.decoder_t(quant_t)
         enc_b = torch.cat([dec_t, enc_b], 1)
 
-        quant_b = self.quant_conv_b(enc_b).permute(0, 2, 3, 1)
+        quant_b = self.quant_conv_b(enc_b)
         quant_b, diff_b, id_b = self.quantize_b(quant_b)
-        quant_b = quant_b.permute(0, 3, 1, 2)
-        diff_b = diff_b.unsqueeze(0)
 
         return quant_b, id_b
 
@@ -138,16 +128,6 @@ class HierarchicalVQModel(pl.LightningModule):
         quant = torch.cat([upsample_t, quant_b], 1)
         quant = self.post_quant_conv(quant)
         dec = self.decoder(quant)
-
-        return dec
-    
-    def decode_code(self, code_t, code_b):
-        quant_t = self.quantize_t.embed_code(code_t)
-        quant_t = quant_t.permute(0, 3, 1, 2)
-        quant_b = self.quantize_b.embed_code(code_b)
-        quant_b = quant_b.permute(0, 3, 1, 2)
-
-        dec = self.decode(quant_t, quant_b)
 
         return dec
 

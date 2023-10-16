@@ -26,7 +26,7 @@ class MultiStageTransformer(pl.LightningModule):
                  downsample_cond_size=-1,
                  pkeep=1.0,
                  sos_token=0,
-                 unconditional=False,
+                 unconditional=True,
                  hier="top",
                  ):
         super().__init__()
@@ -35,7 +35,6 @@ class MultiStageTransformer(pl.LightningModule):
         self.first_stage_key = first_stage_key
         self.cond_stage_key = cond_stage_key
         self.init_first_stage_from_ckpt(first_stage_config)
-        # self.init_cond_stage_from_ckpt("__is_unconditional__")
         self.init_cond_stage_from_ckpt(cond_stage_config)
         if permuter_config is None:
             permuter_config = {"target": "taming.modules.transformer.permuter.Identity"}
@@ -82,8 +81,14 @@ class MultiStageTransformer(pl.LightningModule):
 
     def forward(self, x, c):
         # one step to produce the logits
-        _, z_indices = self.encode_to_z(x)
+        
+        _, _, t_indices, b_indices = self.encode_to_z(x)
         _, c_indices = self.encode_to_c(c)
+
+        if self.hier == "top":
+            z_indices = t_indices
+        elif self.hier == "bottom":
+            z_indices = b_indices
 
         if self.training and self.pkeep < 1.0:
             mask = torch.bernoulli(self.pkeep*torch.ones(z_indices.shape,
@@ -177,14 +182,15 @@ class MultiStageTransformer(pl.LightningModule):
 
     @torch.no_grad()
     def encode_to_z(self, x):
-        if self.hier == "top":
-            quant_z, info = self.first_stage_model.encode_top(x)
-        elif self.hier == "bottom":
-            quant_z, info = self.first_stage_model.encode_bottom(x)
-        indices = info.view(quant_z.shape[0], -1)
-        indices = self.permuter(indices)
-        return quant_z, indices
+        quant_t, quant_b, _, info_t, info_b = self.first_stage_model.encode(x)
 
+        indices_t = info_t[-1].view(quant_t.shape[0], -1)
+        indices_t = self.permuter(indices_t)
+
+        indices_b = info_b[-1].view(quant_b.shape[0], -1)
+        indices_b = self.permuter(indices_b)
+        return quant_t, quant_b, indices_t, indices_b
+    
     @torch.no_grad()
     def encode_to_c(self, c):
         if self.downsample_cond_size > -1:
@@ -202,7 +208,7 @@ class MultiStageTransformer(pl.LightningModule):
         assert self.hier != "top"
         if self.hier == "bottom":
             quant_p, info = self.first_stage_model.encode_top(x)
-        indices = info.view(quant_p.shape[0], -1)
+        indices = info[-1].view(quant_p.shape[0], -1)
         indices = self.permuter(indices)
 
         return quant_p, indices
@@ -249,18 +255,19 @@ class MultiStageTransformer(pl.LightningModule):
         x = x.to(device=self.device)
         c = c.to(device=self.device)
 
-        quant_z, z_indices = self.encode_to_z(x)
+        quant_t, quant_b, t_indices, b_indices = self.encode_to_z(x)
         quant_c, c_indices = self.encode_to_c(c)
 
         # create a "half"" sample
-        z_start_indices = z_indices[:,:z_indices.shape[1]//2]
-        index_sample = self.sample(z_start_indices, c_indices,
-                                   steps=z_indices.shape[1]-z_start_indices.shape[1],
-                                   temperature=temperature if temperature is not None else 1.0,
-                                   sample=True,
-                                   top_k=top_k if top_k is not None else 100,
-                                   callback=callback if callback is not None else lambda k: None)
-        x_sample = self.decode_to_img(index_sample, quant_z.shape)
+        if self.hier == "bottom":
+            z_start_indices = b_indices[:,:b_indices.shape[1]//2]
+            index_sample = self.sample(z_start_indices, c_indices,
+                                    steps=b_indices.shape[1]-z_start_indices.shape[1],
+                                    temperature=temperature if temperature is not None else 1.0,
+                                    sample=True,
+                                    top_k=top_k if top_k is not None else 100,
+                                    callback=callback if callback is not None else lambda k: None)
+            # x_sample = self.decode_to_img(index_sample, quant_z.shape)
 
         # sample
         # z_start_indices = z_indices[:, :0]
@@ -281,10 +288,12 @@ class MultiStageTransformer(pl.LightningModule):
         # x_sample_det = self.decode_to_img(index_sample, quant_z.shape)
 
         # reconstruction
-        x_rec = self.decode_to_img(z_indices, quant_z.shape)
+        if self.hier == "bottom":
+            x_rec = self.decode_full_img(t_indices, b_indices, quant_t.shape, quant_b.shape)
+            # x_sample = self.decode_full_img(z_top, index_sample, quant_top.shape, quant_z.shape)
+            log["reconstructions"] = x_rec
 
-        log["inputs"] = x
-        log["reconstructions"] = x_rec
+        log["inputs"] = x        
 
         if self.cond_stage_key in ["objects_bbox", "objects_center_points"]:
             figure_size = (x_rec.shape[2], x_rec.shape[3])
@@ -313,9 +322,9 @@ class MultiStageTransformer(pl.LightningModule):
             log["conditioning_rec"] = cond_rec
             log["conditioning"] = c
 
-        log["samples_half"] = x_sample
-        log["samples_nopix"] = x_sample_nopix
-        log["samples_det"] = x_sample_det
+        # log["samples_half"] = x_sample
+        # log["samples_nopix"] = x_sample_nopix
+        # log["samples_det"] = x_sample_det
         return log
 
     def get_input(self, key, batch):
