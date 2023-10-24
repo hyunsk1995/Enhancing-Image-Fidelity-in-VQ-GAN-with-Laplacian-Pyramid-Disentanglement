@@ -24,8 +24,13 @@ def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperat
     for i in range(start_i, qshape[2]):
         for j in range(start_j, qshape[3]):
             # print("i, j:", i, j)
-            cx = torch.cat((cidx, idx), dim=1)
-            logits, _, feature = model.transformer[hier](cx[:,:-1], prev) # (B, block_size, vocab_size)
+
+            if prev is not None:
+                pidx = torch.cat((prev, idx), dim=1)
+            else:
+                pidx = idx
+            cx = torch.cat((cidx, pidx), dim=1)
+            logits, _, feature = model.transformer[hier](cx[:,:-1]) # (B, block_size, vocab_size)
             # print(logits.shape)
             logits = logits[:, -qshape[2]*qshape[3]:, :]
             logits = logits[:, i*qshape[2]+j, :]
@@ -41,7 +46,7 @@ def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperat
                 _, ix = torch.topk(probs, k=1, dim=-1)
             
             idx[:,i*qshape[2]+j] = ix.squeeze()
-        
+
     idx = idx.reshape(qshape[0], qshape[2], qshape[3])
 
     return idx, feature
@@ -70,11 +75,10 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
 
         num_stages = model.num_stages
         quant_z, info = model.encode_to_z(x)
+        p_indices = None
 
-        prev = None
         for i in range(num_stages):
             hier = (num_stages-1) - i
-            
             _, c_indices = model.encode_to_c(c)
 
             z_indices = info[hier][-1].view(quant_z[hier].shape[0], -1)
@@ -91,7 +95,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
 
             idx = z_indices
 
-            half_sample = True
+            half_sample = False
             if half_sample:
                 start = idx.shape[1]//2
                 
@@ -103,7 +107,7 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
             start_i = start//qshape[3]
             start_j = start %qshape[3]
 
-            idx, prev = AR_modeling(model, idx, prev, hier, c_indices, start_i, start_j, qshape, temperature, top_k)
+            idx, prev = AR_modeling(model, idx, p_indices, hier, c_indices, start_i, start_j, qshape, temperature, top_k)
             # print(idx.shape)
             x_sample = model.decode_to_img(idx, qshape, hier)
 
@@ -117,6 +121,8 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
             else:
                 full_sample = x_sample
                 # full_recon = x_rec
+
+            p_indices = z_indices
 
         # xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
 
