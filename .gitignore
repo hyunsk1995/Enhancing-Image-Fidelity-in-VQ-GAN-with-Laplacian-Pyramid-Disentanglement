@@ -6,5 +6,5 @@ taming_transformers.egg-info
 .vscode
 output*
 checkpoints
-recon
+recon*
 torch-fidelity
