@@ -5,6 +5,7 @@ import numpy as np
 from torch import einsum
 from einops import rearrange
 
+from torch import distributed as dist_fn
 
 class VectorQuantizer(nn.Module):
     """
@@ -208,8 +209,7 @@ class GumbelQuantize(nn.Module):
         one_hot = F.one_hot(indices, num_classes=self.n_embed).permute(0, 3, 1, 2).float()
         z_q = einsum('b n h w, n d -> b d h w', one_hot, self.embed.weight)
         return z_q
-
-
+    
 class VectorQuantizer2(nn.Module):
     """
     Improved version over VectorQuantizer, can be used as a drop-in replacement. Mostly
@@ -327,6 +327,7 @@ class VectorQuantizer2(nn.Module):
             z_q = z_q.permute(0, 3, 1, 2).contiguous()
 
         return z_q
+    
 
 class EmbeddingEMA(nn.Module):
     def __init__(self, num_tokens, codebook_dim, decay=0.99, eps=1e-5):

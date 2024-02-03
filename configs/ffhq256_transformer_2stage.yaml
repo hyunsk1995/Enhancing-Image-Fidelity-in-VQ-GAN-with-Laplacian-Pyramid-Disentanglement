@@ -1,0 +1,73 @@
+model:
+  base_learning_rate: 0.9e-06
+  target: taming.models.multistage_transformer.MultiStageTransformer
+  params:
+    num_stages: 2
+    cond_stage_key: coord
+    transformer_config:
+    - target: taming.modules.transformer.mingpt.GPT
+      params:
+        vocab_size: 256
+        block_size: 320
+        n_layer: 8
+        n_head: 8
+        n_embd: 512
+    - target: taming.modules.transformer.mingpt.GPT
+      params:
+        vocab_size: 256
+        block_size: 256
+        n_layer: 12
+        n_head: 16
+        n_embd: 512
+    first_stage_config:
+      target: taming.models.vqgan2.HierarchicalVQModel
+      params:
+        ckpt_path: logs/2023-10-14T08-49-01_ffhq256_vqgan_2stage_hier/testtube/version_0/checkpoints/epoch=39.ckpt
+        embed_dim: 64
+        n_embed:
+        - 256
+        - 256
+        num_stages: 2
+        ddconfig:
+          double_z: false
+          z_channels: 256
+          resolution: 256
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 1
+          - 2
+          - 2
+          - 4
+          num_res_blocks: 2
+          residual_units: 64
+          attn_resolutions:
+          - 16
+          dropout: 0.0
+          beta: 0.25
+        lossconfig:
+          target: taming.modules.losses.DummyLoss
+    cond_stage_config:
+      target: taming.modules.misc.coord.CoordStage
+      params:
+        n_embed: 512
+        down_factor: 16
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 50
+    num_workers: 8
+    train:
+      target: taming.data.faceshq.FacesHQ256Train
+      params:
+        size: 256
+        crop_size: 256
+        coord: true
+    validation:
+      target: taming.data.faceshq.FacesHQ256Validation
+      params:
+        size: 256
+        crop_size: 256
+        coord: true

@@ -48,7 +48,7 @@ class CelebAHQValidation(FacesBase):
         self.keys = keys
 
 class FFHQ256Train(FacesBase):
-    def __init__(self, size, keys=None):
+    def __init__(self, size, keys=None, crop_size=None, coord=False):
         super().__init__()
         root = "data/resized"
         with open("data/ffhq256train.txt", "r") as f:
@@ -57,9 +57,8 @@ class FFHQ256Train(FacesBase):
         self.data = ImagePaths(paths=paths, size=size, random_crop=False)
         self.keys = keys
 
-
 class FFHQ256Validation(FacesBase):
-    def __init__(self, size, keys=None):
+    def __init__(self, size, keys=None, crop_size=None, coord=False):
         super().__init__()
         root = "data/resized"
         with open("data/ffhq256validation.txt", "r") as f:
@@ -67,7 +66,6 @@ class FFHQ256Validation(FacesBase):
         paths = [os.path.join(root, relpath) for relpath in relpaths]
         self.data = ImagePaths(paths=paths, size=size, random_crop=False)
         self.keys = keys
-
 
 
 class FFHQTrain(FacesBase):
@@ -93,6 +91,69 @@ class FFHQValidation(FacesBase):
 
 
 class FacesHQTrain(Dataset):
+    # CelebAHQ [0] + FFHQ [1]
+    def __init__(self, size, keys=None, crop_size=None, coord=False):
+        # d1 = CelebAHQTrain(size=size, keys=keys)
+        d2 = FFHQTrain(size=size, keys=keys)
+        self.data = ConcatDatasetWithIndex([d2])
+        self.coord = coord
+        if crop_size is not None:
+            self.cropper = albumentations.RandomCrop(height=crop_size,width=crop_size)
+            if self.coord:
+                self.cropper = albumentations.Compose([self.cropper],
+                                                      additional_targets={"coord": "image"})
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        ex, y = self.data[i]
+        if hasattr(self, "cropper"):
+            if not self.coord:
+                out = self.cropper(image=ex["image"])
+                ex["image"] = out["image"]
+            else:
+                h,w,_ = ex["image"].shape
+                coord = np.arange(h*w).reshape(h,w,1)/(h*w)
+                out = self.cropper(image=ex["image"], coord=coord)
+                ex["image"] = out["image"]
+                ex["coord"] = out["coord"]
+        ex["class"] = y
+        return ex
+
+
+class FacesHQValidation(Dataset):
+    # CelebAHQ [0] + FFHQ [1]
+    def __init__(self, size, keys=None, crop_size=None, coord=False):
+        # d1 = CelebAHQValidation(size=size, keys=keys)
+        d2 = FFHQValidation(size=size, keys=keys)
+        self.data = ConcatDatasetWithIndex([d2])
+        self.coord = coord
+        if crop_size is not None:
+            self.cropper = albumentations.CenterCrop(height=crop_size,width=crop_size)
+            if self.coord:
+                self.cropper = albumentations.Compose([self.cropper],
+                                                      additional_targets={"coord": "image"})
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, i):
+        ex, y = self.data[i]
+        if hasattr(self, "cropper"):
+            if not self.coord:
+                out = self.cropper(image=ex["image"])
+                ex["image"] = out["image"]
+            else:
+                h,w,_ = ex["image"].shape
+                coord = np.arange(h*w).reshape(h,w,1)/(h*w)
+                out = self.cropper(image=ex["image"], coord=coord)
+                ex["image"] = out["image"]
+                ex["coord"] = out["coord"]
+        ex["class"] = y
+        return ex
+
+class FacesHQ256Train(Dataset):
     # CelebAHQ [0] + FFHQ [1]
     def __init__(self, size, keys=None, crop_size=None, coord=False):
         # d1 = CelebAHQTrain(size=size, keys=keys)
@@ -124,7 +185,7 @@ class FacesHQTrain(Dataset):
         return ex
 
 
-class FacesHQValidation(Dataset):
+class FacesHQ256Validation(Dataset):
     # CelebAHQ [0] + FFHQ [1]
     def __init__(self, size, keys=None, crop_size=None, coord=False):
         # d1 = CelebAHQValidation(size=size, keys=keys)

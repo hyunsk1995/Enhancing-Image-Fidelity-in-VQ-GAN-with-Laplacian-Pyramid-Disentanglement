@@ -9,7 +9,9 @@ from einops import repeat
 
 from main import instantiate_from_config
 from taming.modules.transformer.mingpt import sample_with_past
+from kornia.geometry.transform.pyramid import PyrUp
 
+pyrUp = PyrUp()
 
 rescale = lambda x: (x + 1.) / 2.
 
@@ -40,21 +42,34 @@ def sample_classconditional(model, batch_size, class_label, steps=256, temperatu
 
 
 @torch.no_grad()
-def sample_unconditional(model, batch_size, steps=256, temperature=None, top_k=None, top_p=None, callback=None,
-                         dim_z=256, h=16, w=16, verbose_time=False):
+def sample_unconditional(model, batch_size, steps=[1024, 4096], temperature=None, top_k=None, top_p=None, callback=None,
+                         dim_z=64, h=[32, 64], w=[32, 64], verbose_time=False):
     log = dict()
-    qzshape = [batch_size, dim_z, h, w]
     assert model.be_unconditional, 'Expecting an unconditional model.'
-    c_indices = repeat(torch.tensor([model.sos_token]), '1 -> b 1', b=batch_size).to(model.device)  # sos token
     t1 = time.time()
-    index_sample = sample_with_past(c_indices, model.transformer, steps=steps,
-                                    sample_logits=True, top_k=top_k, callback=callback,
-                                    temperature=temperature, top_p=top_p)
-    if verbose_time:
-        sampling_time = time.time() - t1
-        print(f"Full sampling takes about {sampling_time:.2f} seconds.")
-    x_sample = model.decode_to_img(index_sample, qzshape)
-    log["samples"] = x_sample
+
+    prev = None
+    num_stages = model.num_stages
+    for i in range(num_stages):
+        c_indices = repeat(torch.tensor([model.sos_token]), '1 -> b 1', b=batch_size).to(model.device)  # sos token
+        qzshape = [batch_size, dim_z, h[i], w[i]]
+        hier = (num_stages-1) - i
+        idx, prev = sample_with_past(c_indices, model.transformer[hier], prev=prev, steps=steps[i],
+                                        sample_logits=True, top_k=top_k, callback=callback,
+                                        temperature=temperature, top_p=top_p)
+        # print(idx.shape)
+        if verbose_time:
+            sampling_time = time.time() - t1
+            print(f"Full sampling takes about {sampling_time:.2f} seconds.")
+        x_sample = model.decode_to_img(idx, qzshape, hier)
+        log["samples_stage{}".format(i+1)] = x_sample
+
+        if i > 0:       
+            full_sample = pyrUp(full_sample) + x_sample
+        else:
+            full_sample = x_sample
+
+    log["samples"] = full_sample
     return log
 
 
@@ -77,7 +92,7 @@ def run(logdir, model, batch_size, temperature, top_k, unconditional=True, num_s
         print(f"Running in unconditional sampling mode, producing {num_samples} samples.")
         for n, bs in tqdm(enumerate(batches), desc="Sampling"):
             if bs == 0: break
-            logs = sample_unconditional(model, batch_size=bs, temperature=temperature, top_k=top_k, top_p=top_p)
+            logs = sample_unconditional(model, steps=[1024, 4096], batch_size=bs, temperature=temperature, top_k=top_k, top_p=top_p)
             save_from_logs(logs, logdir, base_count=n * batch_size)
 
 
@@ -144,7 +159,7 @@ def get_parser():
         type=int,
         nargs="?",
         help="the batch size",
-        default=25
+        default=1
     )
     parser.add_argument(
         "-k",
@@ -152,7 +167,7 @@ def get_parser():
         type=int,
         nargs="?",
         help="top-k value to sample with",
-        default=250,
+        default=50,
     )
     parser.add_argument(
         "-t",

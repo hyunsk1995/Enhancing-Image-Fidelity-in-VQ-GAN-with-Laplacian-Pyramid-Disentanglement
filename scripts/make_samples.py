@@ -18,14 +18,14 @@ def save_image(x, path):
     Image.fromarray(x).save(path)
 
 # logits : (B, hw, vocab_size)
-def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
+def AR_modeling(model, idx, prev, hier, cidx, start_i, start_j, qshape, temperature, top_k):
     sample = True
 
     for i in range(start_i, qshape[2]):
         for j in range(start_j, qshape[3]):
             # print("i, j:", i, j)
             cx = torch.cat((cidx, idx), dim=1)
-            logits, _ = model.transformer(cx[:,:-1]) # (B, block_size, vocab_size)
+            logits, _, feature = model.transformer[hier](cx[:,:-1], prev) # (B, block_size, vocab_size)
             # print(logits.shape)
             logits = logits[:, -qshape[2]*qshape[3]:, :]
             logits = logits[:, i*qshape[2]+j, :]
@@ -44,7 +44,7 @@ def AR_modeling(model, idx, cidx, start_i, start_j, qshape, temperature, top_k):
         
     idx = idx.reshape(qshape[0], qshape[2], qshape[3])
 
-    return idx
+    return idx, feature
 
 @torch.no_grad()
 def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
@@ -64,51 +64,69 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=64):
                                           "{:06}.png".format(indices[i])))
 
         cond_key = model.cond_stage_key
-        print(torch.cuda.current_device())
         c = model.get_input(cond_key, example).to(model.device)
 
         scale_factor = 1.0
 
-        quant_z, z_indices = model.encode_to_z(x)
-        _, c_indices = model.encode_to_c(c)
+        num_stages = model.num_stages
+        quant_z, info = model.encode_to_z(x)
 
-        qshape = quant_z.shape
-
-        # if cond_key == "segmentation":
-        #     # get image from segmentation mask
-        #     num_classes = c.shape[1]
-        #     c = torch.argmax(c, dim=1, keepdim=True)
-        #     c = torch.nn.functional.one_hot(c, num_classes=num_classes)
-        #     c = c.squeeze(1).permute(0, 3, 1, 2).float()
-        #     c = model.cond_stage_model.to_rgb(c)
-
-        idx = z_indices
-
-        half_sample = False
-        if half_sample:
-            start = idx.shape[1]//2
+        prev = None
+        for i in range(num_stages):
+            hier = (num_stages-1) - i
             
-        else:
-            start = 0
+            _, c_indices = model.encode_to_c(c)
 
-        idx[:,start:] = 0
-        # t_idx = t_idx.reshape(qshape_t[0],qshape_t[2],qshape_t[3])
-        start_i = start//qshape[3]
-        start_j = start %qshape[3]
+            z_indices = info[hier][-1].view(quant_z[hier].shape[0], -1)
 
-        idx = AR_modeling(model, idx, c_indices, start_i, start_j, qshape, temperature, top_k)
-        # print(idx.shape)
-        x_sample = model.decode_to_img(idx, qshape)
+            qshape = quant_z[hier].shape
+
+            # if cond_key == "segmentation":
+            #     # get image from segmentation mask
+            #     num_classes = c.shape[1]
+            #     c = torch.argmax(c, dim=1, keepdim=True)
+            #     c = torch.nn.functional.one_hot(c, num_classes=num_classes)
+            #     c = c.squeeze(1).permute(0, 3, 1, 2).float()
+            #     c = model.cond_stage_model.to_rgb(c)
+
+            idx = z_indices
+
+            half_sample = False
+            if half_sample:
+                start = idx.shape[1]//2
+                
+            else:
+                start = 0
+
+            idx[:,start:] = 0
+            # t_idx = t_idx.reshape(qshape_t[0],qshape_t[2],qshape_t[3])
+            start_i = start//qshape[3]
+            start_j = start %qshape[3]
+
+            idx, prev = AR_modeling(model, idx, prev, hier, c_indices, start_i, start_j, qshape, temperature, top_k)
+            # print(idx.shape)
+            x_sample = model.decode_to_img(idx, qshape, hier)
+
+            for b in range(x_sample.shape[0]):
+                save_image(x_sample[b], os.path.join(outdir, "samples_stage{}".format(i+1),
+                                                "{:06}.png".format(indices[b])))
+
+            if i > 0:       
+                full_sample = pyrUp(full_sample) + x_sample
+                # full_recon = pyrUp(full_recon) + x_rec
+            else:
+                full_sample = x_sample
+                # full_recon = x_rec
 
         # xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
 
-        full_recon, _ = model.first_stage_model(x)
+        full_recon, _, _ = model.first_stage_model(x)
 
         for i in range(full_recon.shape[0]):
             save_image(full_recon[i], os.path.join(outdir, "reconstructions",
                                                 "{:06}.png".format(indices[i])))
-        for i in range(x_sample.shape[0]):
-            save_image(x_sample[i], os.path.join(outdir, "samples",
+        for i in range(full_sample.shape[0]):
+            save_image(full_sample[i], os.path.join(outdir, "samples",
                                                 "{:06}.png".format(indices[i])))
 
 
@@ -191,7 +209,6 @@ def load_model_from_config(config, sd, gpu=True, eval_mode=True):
         print(f"Missing Keys in State Dict: {missing}")
         print(f"Unexpected Keys in State Dict: {unexpected}")
     if gpu:
-        print("available gpus:", torch.cuda.device_count())
         model.cuda()
     if eval_mode:
         model.eval()
@@ -228,7 +245,6 @@ if __name__ == "__main__":
     parser = get_parser()
 
     opt, unknown = parser.parse_known_args()
-    # os.environ['CUDA_VISIBLE_DEVICES'] = po
 
     ckpt = None
     if opt.resume:
@@ -269,7 +285,6 @@ if __name__ == "__main__":
     if show_config:
         print(OmegaConf.to_container(config))
 
-    print(torch.cuda.current_device())
     dsets, model, global_step = load_model_and_dset(config, ckpt, gpu, eval_mode)
 
     print(torch.cuda.current_device())
@@ -282,4 +297,6 @@ if __name__ == "__main__":
     print("Writing samples to ", outdir)
     for k in ["originals", "reconstructions", "samples"]:
         os.makedirs(os.path.join(outdir, k), exist_ok=True)
+    for i in range(model.num_stages):
+        os.makedirs(os.path.join(outdir, "samples_stage{}".format(i+1)), exist_ok=True)
     run_conditional(model, dsets, outdir, opt.top_k, opt.temperature)

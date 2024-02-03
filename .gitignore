@@ -4,7 +4,7 @@ taming/modules/autoencoder
 logs
 taming_transformers.egg-info
 .vscode
-output*
+*.jpg
+*.png
 checkpoints
-recon*
-torch-fidelity
+src

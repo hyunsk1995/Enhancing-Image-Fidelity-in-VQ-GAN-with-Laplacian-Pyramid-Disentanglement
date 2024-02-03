@@ -35,7 +35,9 @@ def run_conditional(model, dsets, outdir, top_k, temperature, batch_size=16):
             save_image(x[i], os.path.join(outdir, "originals",
                                           "{:06}.png".format(indices[i])))
 
-        full_recon, _ = model(x)
+        # xsample = top_model.decode_full_img(t_idx, b_idx, qshape_t, qshape_b)
+
+        full_recon, _, _ = model(x)
 
         for i in range(full_recon.shape[0]):
             save_image(full_recon[i], os.path.join(outdir, "reconstructions",

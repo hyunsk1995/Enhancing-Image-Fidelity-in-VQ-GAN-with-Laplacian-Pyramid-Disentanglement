@@ -94,6 +94,41 @@ class CausalSelfAttention(nn.Module):
         y = self.resid_drop(self.proj(y))
         return y, present   # TODO: check that this does not break anything
 
+class CrossAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.key = nn.Linear(config.n_embd, config.n_embd)
+        self.query = nn.Linear(config.n_embd, config.n_embd)
+        self.value = nn.Linear(config.n_embd, config.n_embd)
+        self.attn_drop = nn.Dropout(config.attn_pdrop)
+        self.resid_drop = nn.Dropout(config.resid_pdrop)
+        self.proj = nn.Linear(config.n_embd, config.n_embd)
+        self.n_head = config.n_head
+
+    def forward(self, source, target, layer_past=None):
+        B, S, C = source.size()
+        B, T, C = target.size()
+
+        k = self.key(source).view(B, S, self.n_head, C // self.n_head).transpose(1, 2)
+        q = self.query(target).view(B, T, self.n_head, C // self.n_head).transpose(1, 2)
+        v = self.value(source).view(B, S, self.n_head, C // self.n_head).transpose(1, 2)
+        
+        # if layer_past is not None:
+        #     past_key, past_value = layer_past
+        #     k = torch.cat((past_key, k), dim=-2)
+        #     v = torch.cat((past_value, v), dim=-2)
+        present = torch.stack((k, v))
+
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_drop(att)
+        y = att @ v
+
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.resid_drop(self.proj(y))
+        return y, present
+
 
 class Block(nn.Module):
     """ an unassuming Transformer block """
@@ -121,6 +156,38 @@ class Block(nn.Module):
             return x, present
         return x
 
+class BlockMCA(nn.Module):
+    """ an unassuming Transformer block """
+    def __init__(self, config):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        # self.lnp = nn.LayerNorm(config.n_embd)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.msa = CausalSelfAttention(config)
+        self.mca = CrossAttention(config)
+        self.mlp = nn.Sequential(
+            nn.Linear(config.n_embd, 4 * config.n_embd),
+            nn.GELU(),  # nice
+            nn.Linear(4 * config.n_embd, config.n_embd),
+            nn.Dropout(config.resid_pdrop),
+        )
+
+    def forward(self, x, prev, layer_past=None, return_present=False):
+        # TODO: check that training still works
+        if return_present: assert not self.training
+        # layer past: tuple of length two with B, nh, T, hs
+        
+        attn, present = self.msa(self.ln1(x), layer_past=layer_past)
+        x = x + attn
+
+        attn, present = self.mca(prev, self.ln1(x), layer_past=layer_past)
+        x = x + attn
+        x = x + self.mlp(self.ln2(x))
+        if layer_past is not None or return_present:
+            return x, present
+        return x
+
+
 
 class GPT(nn.Module):
     """  the full GPT language model, with a context size of block_size """
@@ -136,7 +203,11 @@ class GPT(nn.Module):
         self.pos_emb = nn.Parameter(torch.zeros(1, config.block_size, config.n_embd))
         self.drop = nn.Dropout(config.embd_pdrop)
         # transformer
-        self.blocks = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.blocks_MSA = nn.Sequential(*[Block(config) for _ in range(config.n_layer)])
+        self.blocks_MCA = nn.ModuleList()
+        for _ in range(config.n_layer):
+            self.blocks_MCA.append(BlockMCA(config))
+        
         # decoder head
         self.ln_f = nn.LayerNorm(config.n_embd)
         self.head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -157,7 +228,7 @@ class GPT(nn.Module):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, idx, embeddings=None, targets=None):
+    def forward(self, idx, prev, embeddings=None, targets=None):
         # forward the GPT model
         token_embeddings = self.tok_emb(idx) # each index maps to a (learnable) vector
 
@@ -165,11 +236,17 @@ class GPT(nn.Module):
             token_embeddings = torch.cat((embeddings, token_embeddings), dim=1)
 
         t = token_embeddings.shape[1]
+        # print(t, self.block_size)
         assert t <= self.block_size, "Cannot forward, model block size is exhausted."
         position_embeddings = self.pos_emb[:, :t, :] # each position maps to a (learnable) vector
         x = self.drop(token_embeddings + position_embeddings)
-        x = self.blocks(x)
-        x = self.ln_f(x)
+        if prev is None:
+            feature = self.blocks_MSA(x)
+        else:
+            feature = x
+            for module in self.blocks_MCA:
+                feature = module(feature, prev)
+        x = self.ln_f(feature)
         logits = self.head(x)
 
         # if we are given some desired targets also calculate the loss
@@ -177,10 +254,12 @@ class GPT(nn.Module):
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-        return logits, loss
+        return logits, loss, feature
 
-    def forward_with_past(self, idx, embeddings=None, targets=None, past=None, past_length=None):
+    def forward_with_past(self, idx, prev=None, embeddings=None, targets=None, past=None, past_length=None):
         # inference only
+        # if prev is not None:
+            # print("prev:", prev.shape)
         assert not self.training
         token_embeddings = self.tok_emb(idx)    # each index maps to a (learnable) vector
         if embeddings is not None:              # prepend explicit embeddings
@@ -189,7 +268,10 @@ class GPT(nn.Module):
         if past is not None:
             assert past_length is not None
             past = torch.cat(past, dim=-2)   # n_layer, 2, b, nh, len_past, dim_head
+            past = past[:,:,:,:,-past_length:,:]
+
             past_shape = list(past.shape)
+            # print(past_length, past_shape[4])
             expected_shape = [self.config.n_layer, 2, idx.shape[0], self.config.n_head, past_length, self.config.n_embd//self.config.n_head]
             assert past_shape == expected_shape, f"{past_shape} =/= {expected_shape}"
             position_embeddings = self.pos_emb[:, past_length, :]  # each position maps to a (learnable) vector
@@ -198,18 +280,25 @@ class GPT(nn.Module):
 
         x = self.drop(token_embeddings + position_embeddings)
         presents = []  # accumulate over layers
-        for i, block in enumerate(self.blocks):
-            x, present = block(x, layer_past=past[i, ...] if past is not None else None, return_present=True)
-            presents.append(present)
 
-        x = self.ln_f(x)
+        feature = x
+        if prev == None:
+            for i, block in enumerate(self.blocks_MSA):
+                feature, present = block(feature, layer_past=past[i, ...] if past is not None else None, return_present=True)
+                presents.append(present)
+        else:
+            for i, block in enumerate(self.blocks_MCA):
+                feature, present = block(feature, prev, layer_past=past[i, ...] if past is not None else None, return_present=True)
+                presents.append(present)
+
+        x = self.ln_f(feature)
         logits = self.head(x)
         # if we are given some desired targets also calculate the loss
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
 
-        return logits, loss, torch.stack(presents)  # _, _, n_layer, 2, b, nh, 1, dim_head
+        return logits, loss, torch.stack(presents), feature  # _, _, n_layer, 2, b, nh, 1, dim_head
 
 
 class DummyGPT(nn.Module):
@@ -321,16 +410,26 @@ def sample(model, x, steps, temperature=1.0, sample=False, top_k=None):
 
 
 @torch.no_grad()
-def sample_with_past(x, model, steps, temperature=1., sample_logits=True,
+def sample_with_past(x, model, prev, steps, temperature=1., sample_logits=True,
                      top_k=None, top_p=None, callback=None):
     # x is conditioning
     sample = x
     cond_len = x.shape[1]
     past = None
+    feature = None
     for n in range(steps):
+        # print("step", n)
         if callback is not None:
             callback(n)
-        logits, _, present = model.forward_with_past(x, past=past, past_length=(n+cond_len-1))
+
+        logits, _, present, _feature = model.forward_with_past(x, past=past, prev=prev, past_length=(n+cond_len-1))
+
+        if feature is None:
+            feature = _feature
+        else:
+            feature = torch.cat((feature, _feature), dim=1)
+        # if n == 0:
+        #     print(logits.shape)
         if past is None:
             past = [present]
         else:
@@ -348,7 +447,7 @@ def sample_with_past(x, model, steps, temperature=1., sample_logits=True,
         sample = torch.cat((sample, x), dim=1)
     del past
     sample = sample[:, cond_len:]  # cut conditioning off
-    return sample
+    return sample, feature
 
 
 #### clustering utils

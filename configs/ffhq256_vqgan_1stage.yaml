@@ -1,0 +1,40 @@
+model:
+  base_learning_rate: 1.5e-7
+  target: taming.models.vqgan2.HierarchicalVQModel
+  params:
+    embed_dim: 64
+    n_embed: [256]
+    num_stages: 1
+    ddconfig:
+      double_z: False
+      z_channels: 256
+      resolution: 256
+      in_channels: 3
+      out_ch: 3
+      ch: 128
+      ch_mult: [ 1,1,2,2,4]  # num_down = len(ch_mult)-1
+      num_res_blocks: 2
+      residual_units: 64
+      attn_resolutions: [16]
+      dropout: 0.0
+
+    lossconfig:
+      target: taming.modules.losses.vqvae2loss.VQVAE2Loss
+      params:
+        codebook_weight: [0.25]
+
+data:
+  target: main.DataModuleFromConfig
+  params:
+    batch_size: 160
+    num_workers: 8
+    train:
+      target: taming.data.faceshq.FacesHQ256Train
+      params:
+        size: 256
+        crop_size: 256
+    validation:
+      target: taming.data.faceshq.FacesHQ256Validation
+      params:
+        size: 256
+        crop_size: 256
